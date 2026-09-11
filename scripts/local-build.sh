@@ -718,10 +718,10 @@ patch_qmodem_sipd_pjproject_compat() {
   [ -f "$patch_file" ] || return 0
   [ -f "$source_file" ] || return 0
 
-  if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+  if patch -d "$ROOT_DIR/$SOURCE_DIR/feeds/qmodem" -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
     log "Applying QModem SIP daemon compatibility for pjproject 2.14"
-    patch -p1 < "$patch_file"
-  elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+    patch -d "$ROOT_DIR/$SOURCE_DIR/feeds/qmodem" -p1 < "$patch_file"
+  elif patch -d "$ROOT_DIR/$SOURCE_DIR/feeds/qmodem" -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
     log "QModem SIP daemon pjproject 2.14 compatibility already applied"
   else
     die "Unable to apply QModem SIP daemon pjproject 2.14 compatibility patch"
