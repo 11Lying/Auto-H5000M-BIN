@@ -91,6 +91,11 @@ on:
         required: false
         default: false
         type: boolean
+      confirm_firmware_build:
+        description: 'Actually build H5000M firmware'
+        required: true
+        default: false
+        type: boolean
       run_config_coverage:
         description: '先运行覆盖性配置测试'
         required: false
@@ -130,6 +135,7 @@ env:
 
 jobs:
   config-validation:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -308,7 +314,7 @@ jobs:
 
   # ─── 固件编译（仅手动触发）──────────────────────────────────────
   build:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm_firmware_build == true
     # runs-on 不允许引用顶层 env，直接在这里内联 fromJSON 表达式
     runs-on: ${{ fromJSON(format('["{0}"]', github.event.inputs.runner_type == 'self-hosted' && github.event.inputs.self_hosted_labels || 'ubuntu-24.04')) }}
     timeout-minutes: 600
