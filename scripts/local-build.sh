@@ -709,6 +709,29 @@ patch_qmodem_makefile() {
   fi
 }
 
+# pjproject 2.14.x has only MD5 digest authentication and lacks the later
+# pjsip_cred_info.algorithm_type API. A zeroed legacy credential is MD5, so
+# omitting the post-2.14 assignment preserves the SIP daemon's MD5 behavior.
+patch_qmodem_sipd_pjproject_compat() {
+  local patch_file="$ROOT_DIR/patches/qmodem-sipd-pjproject-2.14.patch"
+  local source_file="feeds/qmodem/application/qmodem_sipd/src/sip_consumer.c"
+  [ -f "$patch_file" ] || return 0
+  [ -f "$source_file" ] || return 0
+
+  if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+    log "Applying QModem SIP daemon compatibility for pjproject 2.14"
+    patch -p1 < "$patch_file"
+  elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+    log "QModem SIP daemon pjproject 2.14 compatibility already applied"
+  else
+    die "Unable to apply QModem SIP daemon pjproject 2.14 compatibility patch"
+  fi
+
+  if grep -q 'algorithm_type = PJSIP_AUTH_ALGORITHM_MD5' "$source_file"; then
+    die "QModem SIP daemon pjproject 2.14 compatibility verification failed"
+  fi
+}
+
 # mt_wifi7's sta_mgmt_assoc.c references pStaCfg->wpa_supplicant_info in the
 # MTK hostapd block; that struct member only exists when APCLI_CFG80211_SUPPORT
 # (or CONFIG_STA_SUPPORT) is defined (rtmp.h). Upstream now wraps every
@@ -1069,6 +1092,7 @@ apply_package_fixes() {
   ensure_external_luci_i18n_packages
   if is_true "$ENABLE_QMODEM"; then
     patch_qmodem_makefile
+    patch_qmodem_sipd_pjproject_compat
   fi
 
   local ebtables_makefile="package/network/utils/ebtables/Makefile"
