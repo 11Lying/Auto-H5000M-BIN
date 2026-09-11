@@ -33,14 +33,14 @@ ADGUARDHOME_IPK_URL="${ADGUARDHOME_IPK_URL:-https://github.com/sirpdboy/luci-app
 ADGUARDHOME_I18N_IPK_URL="${ADGUARDHOME_I18N_IPK_URL:-https://github.com/sirpdboy/luci-app-adguardhome/releases/download/v1.1.1/luci-i18n-adguardhome-zh-cn_0_all.ipk}"
 
 ENABLE_ADGUARDHOME="${ENABLE_ADGUARDHOME:-false}"
-ENABLE_OPENCLASH="${ENABLE_OPENCLASH:-false}"
-ENABLE_NIKKI="${ENABLE_NIKKI:-true}"
-ENABLE_UPNP="${ENABLE_UPNP:-true}"
-ENABLE_VLMCSD="${ENABLE_VLMCSD:-true}"
-ENABLE_MOSDNS="${ENABLE_MOSDNS:-true}"
+ENABLE_OPENCLASH="${ENABLE_OPENCLASH:-true}"
+ENABLE_NIKKI="${ENABLE_NIKKI:-false}"
+ENABLE_UPNP="${ENABLE_UPNP:-false}"
+ENABLE_VLMCSD="${ENABLE_VLMCSD:-false}"
+ENABLE_MOSDNS="${ENABLE_MOSDNS:-false}"
 ENABLE_DOCKERMAN="${ENABLE_DOCKERMAN:-false}"
 ENABLE_HOMEPROXY="${ENABLE_HOMEPROXY:-false}"
-ENABLE_ADBLOCK="${ENABLE_ADBLOCK:-true}"
+ENABLE_ADBLOCK="${ENABLE_ADBLOCK:-false}"
 
 # Modem stack selection — QModem and the original luci-app-modem are
 # MUTUALLY EXCLUSIVE because both wire up the same physical QMI/USB/PCIe
@@ -129,12 +129,17 @@ sanitize_path() {
     export PATH="$PATH:$PATH_APPEND"
   fi
 
-  # Create a shell wrapper at $WRAPPERDIR/install that spoofs GNU header for
-  # --version but delegates real work to /usr/bin/install.
-  # OpenWrt's prereq check requires GNU install; Ubuntu 25 uutils fails it.
+  # Create a shell wrapper that spoofs GNU header for --version but delegates
+  # real work to /usr/bin/install. OpenWrt's prereq check requires GNU install;
+  # Ubuntu 25 uutils fails it. Use a temporary directory when /usr/local/bin is
+  # not writable (for example, Termux and locked-down containers).
   local wrapper_dir="/usr/local/bin"
-  if ! "$wrapper_dir/install" --version 2>&1 | grep -q GNU; then
+  if [ ! -d "$wrapper_dir" ] || [ ! -w "$wrapper_dir" ]; then
+    wrapper_dir="${TMPDIR:-/tmp}/auto-h5000m-tools"
     mkdir -p "$wrapper_dir"
+    export PATH="$wrapper_dir:$PATH"
+  fi
+  if ! "$wrapper_dir/install" --version 2>&1 | grep -q GNU; then
     cat > "$wrapper_dir/install" << 'WRAPPER'
 #!/bin/sh
 for arg in "$@"; do
@@ -354,6 +359,27 @@ check_environment() {
   fi
 }
 
+# Enforce mutually exclusive modem frontends before feeds or .config changes.
+resolve_modem_stack() {
+  if is_true "$ENABLE_QMODEM" && is_true "$ENABLE_ORIGINAL_MODEM"; then
+    echo "WARNING: ENABLE_QMODEM=true and ENABLE_ORIGINAL_MODEM=true are mutually exclusive."
+    log "Auto-disabling ENABLE_ORIGINAL_MODEM (QModem supersedes luci-app-modem)"
+    echo "  Override with: ENABLE_ORIGINAL_MODEM=false ENABLE_QMODEM=true"
+    ENABLE_ORIGINAL_MODEM=false
+  fi
+  if is_true "$ENABLE_QMODEM_NEXT" && is_true "$ENABLE_QMODEM_LUA"; then
+    echo "WARNING: ENABLE_QMODEM_NEXT=true and ENABLE_QMODEM_LUA=true are mutually exclusive."
+    log "Auto-disabling ENABLE_QMODEM_LUA (qmodem-next supersedes lua qmodem)"
+    ENABLE_QMODEM_LUA=false
+  fi
+  if ! is_true "$ENABLE_QMODEM_NEXT" && ! is_true "$ENABLE_QMODEM_LUA" && is_true "$ENABLE_QMODEM"; then
+    echo "WARNING: ENABLE_QMODEM=true but neither *-next nor lua variant is enabled."
+    log "Falling back to qmodem-next (default LuCI frontend)"
+    ENABLE_QMODEM_NEXT=true
+  fi
+  export ENABLE_ORIGINAL_MODEM ENABLE_QMODEM_NEXT ENABLE_QMODEM_LUA
+}
+
 show_features() {
   log "Feature switches"
   cat <<EOF
@@ -370,32 +396,6 @@ Original Modem=${ENABLE_ORIGINAL_MODEM}
 QModem=${ENABLE_QMODEM}
 QModem-Next=${ENABLE_QMODEM_NEXT}
 QModem-Lua=${ENABLE_QMODEM_LUA}
-
-# ENFORCEMENT: QModem and the original luci-app-modem cannot ship together
-# (see comment on ENABLE_ORIGINAL_MODEM). Resolve the conflict here before
-# any feed install or .config write so downstream code sees a single
-# consistent state. If the user explicitly set both, we surface a loud log.
-resolve_modem_stack() {
-  if is_true "$ENABLE_QMODEM" && is_true "$ENABLE_ORIGINAL_MODEM"; then
-    echo "WARNING: ENABLE_QMODEM=true and ENABLE_ORIGINAL_MODEM=true are mutually exclusive."
-    log "Auto-disabling ENABLE_ORIGINAL_MODEM (QModem supersedes luci-app-modem)"
-    echo "  Override with: ENABLE_ORIGINAL_MODEM=false ENABLE_QMODEM=true"
-    ENABLE_ORIGINAL_MODEM=false
-  fi
-  if is_true "$ENABLE_QMODEM_NEXT" && is_true "$ENABLE_QMODEM_LUA"; then
-    echo "WARNING: ENABLE_QMODEM_NEXT=true and ENABLE_QMODEM_LUA=true are mutually exclusive."
-    log "Auto-disabling ENABLE_QMODEM_LUA (qmodem-next supersedes lua qmodem)"
-    ENABLE_QMODEM_LUA=false
-  fi
-  if ! is_true "$ENABLE_QMODEM_NEXT" && ! is_true "$ENABLE_QMODEM_LUA"; then
-    if is_true "$ENABLE_QMODEM"; then
-      echo "WARNING: ENABLE_QMODEM=true but neither *-next nor lua variant is enabled."
-      log "Falling back to qmodem-next (default LuCI frontend)"
-      ENABLE_QMODEM_NEXT=true
-    fi
-  fi
-  export ENABLE_ORIGINAL_MODEM ENABLE_QMODEM_NEXT ENABLE_QMODEM_LUA
-}
 GOPROXY=${GOPROXY}
 GOSUMDB=${GOSUMDB}
 DOWNLOAD_MIRROR=${DOWNLOAD_MIRROR}
@@ -1041,11 +1041,27 @@ install_golang_feed() {
   rm -rf tmp/.packageinfo tmp/info/.packageinfo* tmp/.config-package.in 2>/dev/null || true
 }
 
+remove_h5000m_original_modem_ui() {
+  local image_makefile="target/linux/mediatek/image/filogic.mk"
+  [ -f "$image_makefile" ] || die "H5000M image definition is missing: $image_makefile"
+
+  # The upstream H5000M profile unconditionally adds luci-app-modem. Remove
+  # only that independent UI from this device definition; USB/QMI/MHI drivers,
+  # sms-tool, and quectel-CM-5G remain available for QModem Next.
+  sed -i '/define Device\/hiveton-h5000m/,/endef/ s/\<luci-app-modem\>//g' "$image_makefile"
+  if sed -n '/define Device\/hiveton-h5000m/,/endef/p' "$image_makefile" | grep -qw 'luci-app-modem'; then
+    die "Unable to remove original luci-app-modem from the H5000M image profile"
+  fi
+}
+
 apply_package_fixes() {
   log "Applying package fixes"
   cd "$ROOT_DIR/$SOURCE_DIR"
 
   patch_mtk_wifi_utility_rbus_for_h5000m
+  if ! is_true "$ENABLE_ORIGINAL_MODEM"; then
+    remove_h5000m_original_modem_ui
+  fi
   patch_mtwifi_apcli_bssid_budget
   verify_mtwifi_patch
   patch_mtk_hnat_local_dest
@@ -1817,6 +1833,7 @@ CONFIG_PACKAGE_blkid=y
 CONFIG_PACKAGE_kmod-mt_wifi_cmn=y
 CONFIG_PACKAGE_kmod-mt_wifi7=y
 CONFIG_PACKAGE_kmod-mt_hwifi=y
+CONFIG_PACKAGE_kmod-mtk_wed=y
 # MTK HWIFI core configuration - aligned with upstream mt7987_mt7992.defconfig
 CONFIG_MTK_HWIFI_PCI_SUPPORT=y
 CONFIG_MTK_HWIFI_CONNAC_IF_SUPPORT=y
@@ -1952,22 +1969,9 @@ CONFIG_PACKAGE_luci-app-mtwifi-cfg=y
 CONFIG_PACKAGE_wireless-regdb=y
 EOF
 
-  # Respect WED setting from h5000m.extra.config: if user commented out
-  # CONFIG_PACKAGE_kmod-mtk_wed (i.e. "is not set"), also disable the kernel
-  # CONFIG_MTK_HWIFI_WED_SUPPORT to avoid compilation mismatches. Disabling WED
-  # via kmod-mtk_wed alone leaves CONFIG_MTK_HWIFI_WED_SUPPORT=y in .config,
-  # which can cause build warnings or runtime inconsistencies.
-  if grep -q '^# CONFIG_PACKAGE_kmod-mtk_wed is not set$' "$ROOT_DIR/h5000m.extra.config" 2>/dev/null || \
-     grep -q '^CONFIG_PACKAGE_kmod-mtk_wed is not set$' "$ROOT_DIR/h5000m.extra.config" 2>/dev/null; then
-    log "WED disabled via h5000m.extra.config; disabling WED support in .config"
-    # Remove the WED package and kernel support; upstream base.config may have
-    # CONFIG_MTK_HWIFI_WED_SUPPORT=y, so we override it to is-not-set.
-    sed -i '/^CONFIG_PACKAGE_kmod-mtk_wed=y$/d' .config
-    grep -v '^CONFIG_MTK_HWIFI_WED_SUPPORT=y$' .config > .config.tmp && mv .config.tmp .config
-    echo '# CONFIG_MTK_HWIFI_WED_SUPPORT is not set' >> .config
-  else
-    echo "CONFIG_PACKAGE_kmod-mtk_wed=y" >> .config
-  fi
+  # H5000M requires the MTK WED driver and HWIFI WED Kconfig support. Keep
+  # these explicit so a stale optional-package setting cannot disable WED.
+  echo "CONFIG_PACKAGE_kmod-mtk_wed=y" >> .config
 
   local disabled_pkgs=("luci-app-sms-tool-lite" "luci-app-3ginfo-lite")
 
@@ -2075,6 +2079,9 @@ EOF
   fi
   if ! is_true "$ENABLE_QMODEM"; then
     disabled_pkgs+=("luci-app-qmodem" "luci-i18n-qmodem-zh-cn" "luci-app-qmodem-next" "luci-i18n-qmodem-next-zh-cn" "qmodem" "ubus-at-daemon" "tom_modem" "sms-tool_q" "modem_scan" "quectel-CM-5G-M" "sms-forwarder-next")
+  else
+    ! is_true "$ENABLE_QMODEM_NEXT" && disabled_pkgs+=("luci-app-qmodem-next" "luci-i18n-qmodem-next-zh-cn" "sms-forwarder-next")
+    ! is_true "$ENABLE_QMODEM_LUA" && disabled_pkgs+=("luci-app-qmodem" "luci-i18n-qmodem-zh-cn")
   fi
 
   local all_disabled=("luci-app-wrtbwmon" "luci-app-rclone" "rclone" "rclone-ng" "rclone-webui-react" "${disabled_pkgs[@]}")
@@ -2453,6 +2460,9 @@ collect_artifacts() {
 
   cp -f "$SOURCE_DIR/.config" "$ARTIFACTS_DIR/build.config"
   grep '^CONFIG_PACKAGE_.*=y$' "$SOURCE_DIR/.config" | sort > "$ARTIFACTS_DIR/enabled-packages.txt"
+  find "$ARTIFACTS_DIR" -maxdepth 1 -type f \( -name '*.bin' -o -name '*.img.gz' \) -print0 | \
+    xargs -0 -r sha256sum > "$ARTIFACTS_DIR/sha256sums.txt"
+  [ -s "$ARTIFACTS_DIR/sha256sums.txt" ] || die "No firmware SHA256 checksums were generated"
 
   tar -czf artifacts.tar.gz "$ARTIFACTS_DIR"
   ls -lh "$ARTIFACTS_DIR"

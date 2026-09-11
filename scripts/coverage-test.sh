@@ -44,15 +44,15 @@ log() {
 
 base_env=(
   ENABLE_ADGUARDHOME=false
-  ENABLE_OPENCLASH=false
-  ENABLE_NIKKI=true
-  ENABLE_UPNP=true
-  ENABLE_VLMCSD=true
-  ENABLE_MOSDNS=true
+  ENABLE_OPENCLASH=true
+  ENABLE_NIKKI=false
+  ENABLE_UPNP=false
+  ENABLE_VLMCSD=false
+  ENABLE_MOSDNS=false
   ENABLE_DOCKERMAN=false
   ENABLE_HOMEPROXY=false
   ENABLE_ORIGINAL_MODEM=false
-  ENABLE_ADBLOCK=true
+  ENABLE_ADBLOCK=false
   ENABLE_QMODEM=true
   ENABLE_QMODEM_NEXT=true
   ENABLE_QMODEM_LUA=false
@@ -102,12 +102,11 @@ run_named_profile() {
       run_profile default "$mode"
       ;;
     minimal)
-      run_profile minimal "$mode" \
-        ENABLE_NIKKI=false ENABLE_UPNP=false ENABLE_VLMCSD=false ENABLE_MOSDNS=false \
+      run_profile minimal "$mode"
       ;;
     proxy-stack)
       run_profile proxy-stack "$mode" \
-        ENABLE_OPENCLASH=true ENABLE_NIKKI=true ENABLE_MOSDNS=true ENABLE_HOMEPROXY=true
+        ENABLE_NIKKI=true ENABLE_MOSDNS=true ENABLE_HOMEPROXY=true
       ;;
     homeproxy-only)
       run_profile homeproxy-only "$mode" \

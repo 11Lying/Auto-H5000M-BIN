@@ -1,6 +1,9 @@
 name: Build ImmortalWrt H5000M
 
 on:
+  push:
+    branches:
+      - main
   schedule:
     - cron: '0 16 * * 0'  # 每周一北京时间 00:00
   workflow_dispatch:
@@ -26,27 +29,27 @@ on:
       enable_openclash:
         description: '启用 OpenClash'
         required: false
-        default: false
+        default: true
         type: boolean
       enable_nikki:
         description: '启用 Nikki'
         required: false
-        default: true
+        default: false
         type: boolean
       enable_upnp:
         description: '启用 UPnP'
         required: false
-        default: true
+        default: false
         type: boolean
       enable_vlmcsd:
         description: '启用 VLMCSd'
         required: false
-        default: true
+        default: false
         type: boolean
       enable_mosdns:
         description: '启用 MosDNS'
         required: false
-        default: true
+        default: false
         type: boolean
       enable_dockerman:
         description: '启用 DockerMan'
@@ -81,12 +84,12 @@ on:
       enable_adblock:
         description: '启用 Adblock（DNS 层广告/恶意域名过滤，依赖 dnsmasq/unbound/smartdns）'
         required: false
-        default: true
+        default: false
         type: boolean
       publish_release:
-        description: '上传 Release（默认 true）'
+        description: '保留项：产物仅作为 Actions artifact 上传'
         required: false
-        default: true
+        default: false
         type: boolean
       run_config_coverage:
         description: '先运行覆盖性配置测试'
@@ -112,7 +115,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
@@ -126,6 +129,99 @@ env:
   GITHUB_PROXY_PREFIXES: "https://ghfast.top/ https://gh-proxy.com/ https://gh.llkk.cc/"
 
 jobs:
+  config-validation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 安装配置验证依赖
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git ccache python3 perl libncurses5-dev libssl-dev libgmp3-dev \
+            libmbedtls-dev zlib1g-dev autoconf automake libtool patch make gcc g++ gawk \
+            gettext unzip file wget curl rsync zstd golang-go rustc cargo
+
+      - name: 运行 H5000M 配置验证
+        shell: bash
+        env:
+          ENABLE_ADGUARDHOME: false
+          ENABLE_OPENCLASH: true
+          ENABLE_NIKKI: false
+          ENABLE_UPNP: false
+          ENABLE_VLMCSD: false
+          ENABLE_MOSDNS: false
+          ENABLE_DOCKERMAN: false
+          ENABLE_HOMEPROXY: false
+          ENABLE_ORIGINAL_MODEM: false
+          ENABLE_ADBLOCK: false
+          ENABLE_QMODEM: true
+          ENABLE_QMODEM_NEXT: true
+          ENABLE_QMODEM_LUA: false
+          THREADS: 2
+        run: |
+          set -euo pipefail
+          bash scripts/local-build.sh --config-only
+
+      - name: 验证最终配置
+        shell: bash
+        run: |
+          set -euo pipefail
+          config="immortalwrt/.config"
+          [ -f "$config" ] || { echo "❌ 未生成最终 .config"; exit 1; }
+          required=(
+            'CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton-h5000m=y'
+            'CONFIG_MTK_HWIFI_MT7992=y'
+            'CONFIG_MTK_HWIFI_MT799A=y'
+            'CONFIG_MTK_HWIFI_WED_SUPPORT=y'
+            'CONFIG_PACKAGE_kmod-mt_hwifi=y'
+            'CONFIG_PACKAGE_kmod-mtk_wed=y'
+            'CONFIG_PACKAGE_kmod-mediatek_hnat=y'
+            'CONFIG_PACKAGE_kmod-hwmon-pwmfan=y'
+            'CONFIG_PACKAGE_luci-app-Airpifanctrl=y'
+            'CONFIG_PACKAGE_luci-app-qmodem-next=y'
+            'CONFIG_PACKAGE_luci-app-openclash=y'
+            'CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y'
+            'CONFIG_PACKAGE_kmod-usb-serial-option=y'
+            'CONFIG_PACKAGE_kmod-pcie_mhi=y'
+          )
+          disabled=(
+            'luci-app-nikki'
+            'luci-app-mosdns'
+            'luci-app-upnp'
+            'adblock'
+            'luci-app-adblock'
+            'luci-app-vlmcsd'
+            'luci-app-adguardhome'
+            'luci-app-dockerman'
+            'luci-app-homeproxy'
+            'luci-app-qmodem'
+            'luci-app-modem'
+          )
+          for symbol in "${required[@]}"; do
+            grep -qx "$symbol" "$config" || { echo "❌ 缺少最终配置: $symbol"; exit 1; }
+          done
+          for package in "${disabled[@]}"; do
+            if grep -qx "CONFIG_PACKAGE_${package}=y" "$config"; then
+              echo "❌ 非目标组件仍被启用: $package"
+              exit 1
+            fi
+          done
+          grep -E '^(CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton-h5000m|CONFIG_MTK_HWIFI_(MT7992|MT799A|WED_SUPPORT)|CONFIG_PACKAGE_(kmod-mt_hwifi|kmod-mtk_wed|kmod-mediatek_hnat|kmod-hwmon-pwmfan|luci-app-Airpifanctrl|luci-app-qmodem-next|luci-app-openclash|kmod-usb-net-qmi-wwan|kmod-usb-serial-option|kmod-pcie_mhi))=' "$config"
+
+      - name: 上传最终配置
+        uses: actions/upload-artifact@v4
+        with:
+          name: H5000M-config-validation
+          path: immortalwrt/.config
+          retention-days: 7
+
   # ─── 覆盖性配置测试（与固件编译并行，不阻塞最终 Release）─────────────────
   config-coverage:
     # runs-on 不允许引用顶层 env，直接在这里内联 fromJSON 表达式
@@ -144,11 +240,11 @@ jobs:
         run: |
           set -euo pipefail
           declare -A scheduled_defaults=(
-            [enable_adguardhome]=false [enable_openclash]=false [enable_nikki]=true
-            [enable_upnp]=true [enable_vlmcsd]=true [enable_mosdns]=true [enable_dockerman]=false
-            [enable_homeproxy]=false [enable_original_modem]=false [enable_adblock]=true
+            [enable_adguardhome]=false [enable_openclash]=true [enable_nikki]=false
+            [enable_upnp]=false [enable_vlmcsd]=false [enable_mosdns]=false [enable_dockerman]=false
+            [enable_homeproxy]=false [enable_original_modem]=false [enable_adblock]=false
             [enable_qmodem]=true [enable_qmodem_next]=true [enable_qmodem_lua]=false
-            [publish_release]=true [run_config_coverage]=false [coverage_profile_set]=quick
+            [publish_release]=false [run_config_coverage]=false [coverage_profile_set]=quick
             [full_build_smoke_profile]=''
           )
           declare -A manual=(
@@ -185,7 +281,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            build-essential git ccache python3 libncurses5-dev libssl-dev libgmp3-dev \
+            build-essential git ccache python3 perl libncurses5-dev libssl-dev libgmp3-dev \
             libmbedtls-dev zlib1g-dev autoconf automake libtool patch make gcc g++ gawk \
             gettext unzip file wget curl rsync zstd golang-go rustc cargo 2>&1 | tail -3
 
@@ -210,8 +306,9 @@ jobs:
           export THREADS="$(nproc)"
           bash scripts/coverage-test.sh "$PROFILE_SET"
 
-  # ─── 固件编译（与 coverage 并行）──────────────────────────────────────
+  # ─── 固件编译（仅手动触发）──────────────────────────────────────
   build:
+    if: github.event_name == 'workflow_dispatch'
     # runs-on 不允许引用顶层 env，直接在这里内联 fromJSON 表达式
     runs-on: ${{ fromJSON(format('["{0}"]', github.event.inputs.runner_type == 'self-hosted' && github.event.inputs.self_hosted_labels || 'ubuntu-24.04')) }}
     timeout-minutes: 600
@@ -227,11 +324,11 @@ jobs:
         run: |
           set -euo pipefail
           declare -A defaults=(
-            [enable_adguardhome]=false [enable_openclash]=false [enable_nikki]=true
-            [enable_upnp]=true [enable_vlmcsd]=true [enable_mosdns]=true [enable_dockerman]=false
-            [enable_homeproxy]=false [enable_original_modem]=false [enable_adblock]=true
+            [enable_adguardhome]=false [enable_openclash]=true [enable_nikki]=false
+            [enable_upnp]=false [enable_vlmcsd]=false [enable_mosdns]=false [enable_dockerman]=false
+            [enable_homeproxy]=false [enable_original_modem]=false [enable_adblock]=false
             [enable_qmodem]=true [enable_qmodem_next]=true [enable_qmodem_lua]=false
-            [publish_release]=true
+            [publish_release]=false
           )
           declare -A inputs=(
             [enable_adguardhome]='${{ github.event.inputs.enable_adguardhome }}'
@@ -284,7 +381,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential ack antlr3 asciidoc autoconf automake autopoint binutils bison \
             bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk \
-            gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool \
+            gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool perl \
             lib32gcc-s1 libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev \
             libltdl-dev libmbedtls-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev \
             libpython3-dev libreadline-dev libssl-dev libtool lld llvm lrzsz mkisofs msmtp \
@@ -334,7 +431,7 @@ jobs:
           echo "🔨 调用 scripts/local-build.sh (${THREADS} threads)..."
           bash scripts/local-build.sh
 
-      - name: 校验产物
+      - name: 校验产物与最终配置
         id: artifacts
         shell: bash
         run: |
@@ -343,46 +440,32 @@ jobs:
             echo "❌ 未找到任何产物"
             exit 1
           fi
+          config="artifacts/build.config"
+          manifest="artifacts/openwrt-image.manifest"
+          [ -f "$config" ] || { echo "❌ 未找到最终 .config"; exit 1; }
+          [ -f "$manifest" ] || { echo "❌ 未找到 H5000M 镜像清单"; exit 1; }
+          for symbol in \
+            'CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton-h5000m=y' \
+            'CONFIG_MTK_HWIFI_WED_SUPPORT=y' \
+            'CONFIG_PACKAGE_kmod-mtk_wed=y' \
+            'CONFIG_PACKAGE_kmod-mediatek_hnat=y' \
+            'CONFIG_PACKAGE_kmod-hwmon-pwmfan=y' \
+            'CONFIG_PACKAGE_luci-app-Airpifanctrl=y' \
+            'CONFIG_PACKAGE_luci-app-qmodem-next=y' \
+            'CONFIG_PACKAGE_luci-app-openclash=y'; do
+            grep -qx "$symbol" "$config" || { echo "❌ 缺少最终配置: $symbol"; exit 1; }
+          done
+          for package in kmod-mtk_wed kmod-mediatek_hnat kmod-hwmon-pwmfan luci-app-Airpifanctrl luci-app-qmodem-next luci-app-openclash; do
+            grep -q "^${package}[[:space:]-]" "$manifest" || { echo "❌ 镜像清单缺少: $package"; exit 1; }
+          done
+          [ -s artifacts/sha256sums.txt ] || { echo "❌ 未找到固件 SHA256"; exit 1; }
+          cat artifacts/sha256sums.txt
           ls -lh artifacts/
           echo "build_time=$(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$GITHUB_OUTPUT"
 
-      - name: 上传产物
+      - name: 上传固件
         uses: actions/upload-artifact@v4
         with:
-          name: ImmortalWrt-H5000M-${{ github.run_number }}
+          name: H5000M-firmware
           path: artifacts/
           retention-days: 30
-
-      - name: 创建 GitHub Release
-        if: steps.features.outputs.publish_release == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: ImmortalWrt H5000M Latest
-          body: |
-            🎉 **ImmortalWrt H5000M 固件已构建完成**
-
-            📅 构建时间: ${{ steps.artifacts.outputs.build_time }}
-            🔗 运行: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            📦 源码: `${{ env.REPO_URL }}` @ `${{ env.REPO_BRANCH }}`
-
-            **⚙️ 启用的功能:**
-            - AdGuardHome: ${{ steps.features.outputs.enable_adguardhome }}
-            - OpenClash:   ${{ steps.features.outputs.enable_openclash }}
-            - Nikki:       ${{ steps.features.outputs.enable_nikki }}
-            - UPnP:        ${{ steps.features.outputs.enable_upnp }}
-            - VLMCSd:      ${{ steps.features.outputs.enable_vlmcsd }}
-            - MosDNS:      ${{ steps.features.outputs.enable_mosdns }}
-            - DockerMan:   ${{ steps.features.outputs.enable_dockerman }}
-            - HomeProxy:   ${{ steps.features.outputs.enable_homeproxy }}
-            - 原版 Modem:  ${{ steps.features.outputs.enable_original_modem }}
-            - QModem:      ${{ steps.features.outputs.enable_qmodem }}
-              - QModem-Next: ${{ steps.features.outputs.enable_qmodem_next }}
-              - QModem-Lua:  ${{ steps.features.outputs.enable_qmodem_lua }}
-            - Adblock:     ${{ steps.features.outputs.enable_adblock }}
-          prerelease: false
-          make_latest: true
-          overwrite_files: true
-          files: artifacts/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
