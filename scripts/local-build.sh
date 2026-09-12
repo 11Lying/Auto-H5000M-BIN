@@ -709,6 +709,31 @@ patch_qmodem_makefile() {
   fi
 }
 
+# QModem's VoIP daemon uses only the generic libwebsockets API. Select the
+# full variant required by ttyd instead of the incompatible mbedTLS variant.
+patch_qmodem_voip_libwebsockets_variant() {
+  local patch_file="$ROOT_DIR/patches/qmodem-voip-libwebsockets-full.patch"
+  local feed_dir="$ROOT_DIR/$SOURCE_DIR/feeds/qmodem"
+  local source_file="$feed_dir/application/voipd/Makefile"
+  [ -f "$patch_file" ] || return 0
+  [ -f "$source_file" ] || return 0
+
+  if patch -d "$feed_dir" -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+    log "Selecting libwebsockets-full for QModem VoIP compatibility with ttyd"
+    patch -d "$feed_dir" -p1 < "$patch_file"
+  elif patch -d "$feed_dir" -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+    log "QModem VoIP libwebsockets-full selection already applied"
+  else
+    die "Unable to apply QModem VoIP libwebsockets variant patch"
+  fi
+
+  grep -q '+libwebsockets-full' "$source_file" || \
+    die "QModem VoIP libwebsockets-full selection verification failed"
+  if grep -q '+libwebsockets-mbedtls' "$source_file"; then
+    die "QModem VoIP still selects libwebsockets-mbedtls"
+  fi
+}
+
 # pjproject 2.14.x has only MD5 digest authentication and lacks the later
 # pjsip_cred_info.algorithm_type API. A zeroed legacy credential is MD5, so
 # omitting the post-2.14 assignment preserves the SIP daemon's MD5 behavior.
@@ -1092,6 +1117,7 @@ apply_package_fixes() {
   ensure_external_luci_i18n_packages
   if is_true "$ENABLE_QMODEM"; then
     patch_qmodem_makefile
+    patch_qmodem_voip_libwebsockets_variant
     patch_qmodem_sipd_pjproject_compat
   fi
 
