@@ -43,6 +43,11 @@ main() {
   fi
   cp .config "$REPORT_DIR/build.config"
 
+  # package/compile needs the host tools and cross toolchain first. This is the
+  # same preparation used by the firmware path, but stops before image creation.
+  log 'Preparing host tools and target toolchain'
+  run_timed 'Building host tools and target toolchain' make -j"$THREADS" tools/install toolchain/install |& tee "$REPORT_DIR/toolchain.log"
+
   # This target builds package archives and their dependencies, but does not
   # invoke image generation. package/install below performs the same opkg rootfs
   # transaction used by a firmware build.
