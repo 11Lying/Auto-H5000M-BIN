@@ -114,6 +114,11 @@ on:
         required: false
         default: ''
         type: string
+      run_rootfs_preflight:
+        description: '仅构建 IPK 并执行 rootfs 安装与所有权预检（不生成固件）'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -227,6 +232,99 @@ jobs:
           name: H5000M-config-validation
           path: immortalwrt/.config
           retention-days: 7
+
+  rootfs-preflight:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_rootfs_preflight == true
+    runs-on: ${{ fromJSON(format('["{0}"]', github.event.inputs.runner_type == 'self-hosted' && github.event.inputs.self_hosted_labels || 'ubuntu-24.04')) }}
+    timeout-minutes: 600
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 释放磁盘空间（仅 github-hosted 跑）
+        if: github.event.inputs.runner_type != 'self-hosted'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /etc/mysql /etc/php \
+            /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache /usr/local/.ghcup \
+            /usr/local/graalvm /imagegeneration /usr/local/share \
+            /var/cache/apt/archives/* 2>/dev/null || true
+          sudo apt-get -y purge azure-cli* ghc* zulu* hhvm* llvm* firefox* \
+            google* dotnet* aspnetcore* powershell* openjdk* adoptopenjdk* mysql* php* \
+            mongodb* snap* 2>/dev/null || true
+          sudo apt-get -y autoremove --purge
+          sudo apt-get -y clean
+          df -h /
+
+      - name: 安装编译依赖（仅 github-hosted 跑；自托管需预装依赖）
+        if: github.event.inputs.runner_type != 'self-hosted'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ack antlr3 asciidoc autoconf automake autopoint binutils bison \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk \
+            gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool perl \
+            lib32gcc-s1 libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev \
+            libltdl-dev libmbedtls-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev \
+            libpython3-dev libreadline-dev libssl-dev libtool lld llvm lrzsz mkisofs msmtp \
+            nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply \
+            python3-pyelftools python3-setuptools qemu-utils re2c rsync scons squashfs-tools \
+            subversion swig texinfo uglifyjs unzip upx-ucl vim wget xmlto xxd zlib1g-dev \
+            rustc cargo golang-go zstd file
+
+      - name: 设置 ccache（编译加速）
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: immortalwrt-h5000m-preflight-${{ env.REPO_BRANCH }}
+          max-size: 8G
+          save: true
+
+      - name: 恢复构建缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.SOURCE_DIR }}/dl
+            ${{ env.SOURCE_DIR }}/staging_dir/host
+            ${{ env.SOURCE_DIR }}/build_dir/host
+          key: ${{ runner.os }}-preflight-${{ env.REPO_BRANCH }}-${{ hashFiles('feeds.conf.default', 'h5000m.extra.config', 'patches/**', 'scripts/local-build.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-
+            ${{ runner.os }}-preflight-${{ env.REPO_BRANCH }}-
+
+      - name: 构建 IPK 并执行 rootfs 预检
+        shell: bash
+        env:
+          ENABLE_ADGUARDHOME: false
+          ENABLE_OPENCLASH: true
+          ENABLE_NIKKI: false
+          ENABLE_UPNP: false
+          ENABLE_VLMCSD: false
+          ENABLE_MOSDNS: false
+          ENABLE_DOCKERMAN: false
+          ENABLE_HOMEPROXY: false
+          ENABLE_ORIGINAL_MODEM: false
+          ENABLE_ADBLOCK: false
+          ENABLE_QMODEM: true
+          ENABLE_QMODEM_NEXT: true
+          ENABLE_QMODEM_LUA: false
+        run: |
+          set -euo pipefail
+          export PATH="/usr/lib/ccache:$PATH"
+          export THREADS="$(nproc)"
+          bash scripts/rootfs-preflight.sh
+
+      - name: 上传 rootfs 预检报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: H5000M-rootfs-preflight
+          path: rootfs-preflight/
+          retention-days: 14
 
   # ─── 覆盖性配置测试（与固件编译并行，不阻塞最终 Release）─────────────────
   config-coverage:
