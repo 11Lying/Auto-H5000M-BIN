@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - wrt2512      # 新基座分支：push 即跑 config-validation（快速反馈配置是否成立）
   schedule:
     - cron: '0 16 * * 0'  # 每周一北京时间 00:00
   workflow_dispatch:
