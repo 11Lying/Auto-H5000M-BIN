@@ -1,11 +1,12 @@
---- a/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
-+++ b/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
-@@ -66,6 +66,9 @@
- 	#cooling-cells = <2>;
- 	cooling-levels = <0 10 20 30 40 50 60 70 80 90 100 110 120 130 140 150 160 170 180 190 200 210 220 240 255>;
+--- a/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts	2026-10-07 07:34:42.679858083 +0000
++++ b/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts	2026-10-07 07:34:42.691858083 +0000
+@@ -96,6 +96,10 @@
+ 
+ &fan {
  	pwms = <&pwm 1 50000 0>;
-+	/* Start quietly (20%) instead of 100% duty at module load.
-+	 * Pairs with kernel/999-h5000m-pwm-fan-boot-duty.patch */
++	/* Quiet startup: drive 20% duty (51/255) at module load instead of 100%.
++	 * Avoids the ~10s full-speed blast between pwm-fan probe and userspace.
++	 * Pairs with patches-6.12/999-h5000m-pwm-fan-boot-duty.patch */
 +	pwm-fan,boot-duty = <51>;
  	status = "okay";
  };

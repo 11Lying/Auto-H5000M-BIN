@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Build selected IPKs, run OpenWrt's real rootfs package transaction, and audit
 # ownership of every IPK in that exact transaction. No firmware image is built.
+#
+# ⚠️ 25.12 基座（wrt2512 分支）注意：25.12 默认用 apk（CONFIG_USE_APK=y），
+#    安装清单是 tmp/apk_install_list、包是 .apk（tar+gzip，含 .PKGINFO），
+#    与本脚本目前解析的 opkg/IPK（ar + control.tar.gz/data.tar.gz）不同。
+#    本脚本在检测到 apk 时会明确报错退出，避免给出"检查通过"的假结论。
+#    需要 rootfs 预检的话，先把下面的 IPK 解析路径改成 .apk（tar tzf + .PKGINFO）。
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -59,6 +65,9 @@ main() {
   set -e
 
   local install_list='tmp/opkg_install_list'
+  if [ ! -s "$install_list" ] && [ -s tmp/apk_install_list ]; then
+    die 'this base uses apk (25.12): tmp/apk_install_list found but the audit below only knows opkg/IPK. Adapt the audit to .apk (tar tzf + .PKGINFO) before using this job.'
+  fi
   [ -s "$install_list" ] || die 'OpenWrt did not generate the rootfs opkg install list'
   cp "$install_list" "$REPORT_DIR/opkg-install-list.txt"
 

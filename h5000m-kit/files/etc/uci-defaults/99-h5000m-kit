@@ -1,7 +1,16 @@
 #!/bin/sh
 # =====================================================================
-# h5000m-kit first-boot provisioning (runs once, after every package's
-# own uci-defaults, on a freshly flashed system)
+# h5000m-kit first-boot provisioning —— ImmortalWrt 25.12 (mt76) 分支
+#
+# 运行时机：每个包自己的 uci-defaults 之后、网络/无线启动之前。
+# 原则：幂等、只做"没设置过才设置"的事、不覆盖别的包自己的默认配置。
+#
+# 与 24.10 基座的差异（都是 25.12 带来的）：
+#   * Wi-Fi 是开源 mt76（不再有 mtwifi-cfg / iwpriv / rai0），无线配置改成标准
+#     mac80211 语法（wifi config + radio band）。
+#   * 没有 MTK SDK HNAT / turboacc，硬件转发改由 fw4 的 flow_offloading(_hw)
+#     驱动主线 PPE/WED。
+#   * 包管理器是 apk（本脚本不调用任何包管理器：全部资产构建期已进镜像）。
 # =====================================================================
 . /lib/functions.sh 2>/dev/null
 
@@ -11,13 +20,8 @@ OVL=/usr/share/h5000m-kit/overlay
 
 # ---------------------------------------------------------------- overlay
 # 只用来盖“会被别的包安装的文件”（包安装顺序在镜像里没有保证）：
-#   /bin/sendat(+.real) —— AT 双口隔离 wrapper。feed 里另有一个同名的 sendat 包
-#                          （2024.01.22~624c58f6），已在本仓库 extra.config 里显式
-#                          关闭，这里再盖一次做保险。
-#   （sms_forwarder_next 的 +8h 时区修正已改为构建期打补丁，
-#     见 local-build.sh 的 patch_qmodem_sms_tz —— 不再用旧文件覆盖，
-#     以免丢掉 QModem 上游新增的功能。）
-# 面板 webui 前端没有竞争方（本包是唯一提供者），不需要在此重复。
+#   /bin/sendat(+.real) —— AT 双口隔离 wrapper。feed 里另有一个同名的 sendat 包，
+#                          已在本仓库 extra.config 里显式关闭，这里再盖一次做保险。
 if [ -d "$OVL" ] ; then
 	log "injecting overlay files"
 	( cd "$OVL" && tar cf - . ) | ( cd / && tar xf - )
@@ -38,8 +42,20 @@ chmod 755 /etc/init.d/fanearly /etc/init.d/fansample /etc/init.d/qmi-recovery \
 chmod 755 /etc/hotplug.d/usb/50-rm502q-at /etc/hotplug.d/iface/95-ipv6-guard \
           /etc/hotplug.d/iface/99-oc-wandns 2>/dev/null
 
-# ---------------------------------------------------------------- uci
+# ---------------------------------------------------------------- 系统
+uci -q set system.@system[0].hostname='Hiveton-H5000M'
+uci -q set system.@system[0].timezone='CST-8'
+uci -q set system.@system[0].zonename='Asia/Shanghai'
+uci -q commit system
+
+# LAN 网段：保持现网的 192.168.88.1（不要就删这两行）
+uci -q set network.lan.ipaddr='192.168.88.1'
+uci -q commit network
+
+# ---------------------------------------------------------------- 风扇
 # 风扇：CPU 与 WiFi 取高，曲线照现网；down_delay 5s
+#   25.12 仍是 MTK 闭源 mt_wifi7 驱动，WiFi 温度继续走 `iwpriv rai0 stat`
+#   （fancontrol 里也加了 hwmon 兜底，万一以后换开源驱动还能用）。
 uci -q batch <<-EOC
 	set fancontrol.settings=fancontrol
 	set fancontrol.settings.enable='1'
@@ -52,16 +68,65 @@ uci -q batch <<-EOC
 	set fancontrol.settings.fail_pwm='153'
 	set fancontrol.settings.wifi_temp='1'
 	set fancontrol.settings.wifi_iface='rai0'
+	set fancontrol.settings.wifi_temp_path=''
 	set fancontrol.settings.wifi_offset='5'
 	set fancontrol.settings.curve='20:10,30:11,40:14,45:17,50:21,55:27,58:31,60:36,63:47,66:66,70:78,75:86,80:91,85:95,90:97,95:100,110:100'
 EOC
 
-# LAN 网段：保持现网的 192.168.88.1（不要就删这两行）
-uci -q set network.lan.ipaddr='192.168.88.1'
-uci -q commit network
+# ---------------------------------------------------------------- 硬件加速
+# 25.12 仍是 MTK SDK HNAT（kmod-mediatek_hnat + warp + WHNAT），LuCI 开关是
+# luci-app-turboacc-mtk；hnat-detect 会在接口 up 时自动判定加速状态。
+# ★ 有 SDK HNAT 时 fw4 的 flow_offloading 必须保持 0（与 SDK 私有 hook 互斥），
+#   所以这里**故意不写** flow_offloading —— 保持 OpenWrt 默认 0。
+#   （对照：如果哪天换回主线 PPE offload 的基座，这里要反过来设 1/1。）
 
+# ---------------------------------------------------------------- 无线（mtwifi）
+# 25.12 + MTK 闭源驱动：/etc/config/wireless 由 mtwifi-cfg-ucode 生成
+# （radio 名形如 MT7992_1_1 / MT7992_1_2，option band '2g' / '5g'）。
+# 首次启动先生成 radio，再按频段配置：
+#   5G    -> 打开；SSID tiandihui-5g（与现网一致），WPA2/WPA3 混合，EHT80
+#   2.4G  -> 关闭（与现网一致；要开访客网再单独开）
+# 密码是占位符，刷完必须自己改（不要在公开仓库里放 WiFi 密码）：
+#   uci set wireless.<5G设备段的iface>.key='你的密码'; uci commit wireless; wifi reload
+if [ -x /sbin/wifi ]; then
+	uci -q show wireless 2>/dev/null | grep -q '=wifi-device$' || wifi config >/dev/null 2>&1 || true
+	WIFI_KEY="${H5000M_WIFI_KEY:-REPLACE_WITH_YOUR_WIFI_KEY}"
+	for s in $(uci -q show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
+		band=$(uci -q get "wireless.$s.band")
+		[ -n "$band" ] || band=$(uci -q get "wireless.$s.hwmode")
+		uci -q set "wireless.$s.country='US'"
+		case "$band" in
+			5g|11a|11ac|11ax|11be)
+				uci -q set "wireless.$s.disabled='0'"
+				uci -q set "wireless.$s.channel='149'"
+				uci -q set "wireless.$s.htmode='EHT80'"
+				;;
+			*)
+				uci -q set "wireless.$s.disabled='1'"
+				;;
+		esac
+	done
+	for w in $(uci -q show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.=]*\)=wifi-iface$/\1/p'); do
+		[ "$(uci -q get "wireless.$w.mode")" = "ap" ] || continue
+		dev=$(uci -q get "wireless.$w.device")
+		case "$(uci -q get "wireless.$dev.band")" in
+			5g)
+				uci -q set "wireless.$w.ssid='tiandihui-5g'"
+				uci -q set "wireless.$w.encryption='sae-mixed'"
+				uci -q set "wireless.$w.key='$WIFI_KEY'"
+				uci -q set "wireless.$w.disabled='0'"
+				;;
+			*)
+				uci -q set "wireless.$w.disabled='1'"
+				;;
+		esac
+	done
+	uci -q commit wireless
+fi
+
+# ---------------------------------------------------------------- 短信转发
 # 短信转发（企业微信群机器人）骨架。webhook key 属于密钥，不入公开仓库，
-# 刷完后把占位符换成你的 key 即可（一条命令，见 README）：
+# 刷完后把占位符换成你的 key 即可：
 #   uci set sms_forwarder.wecom.api_config='{"webhook_url":"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=<你的key>"}'
 #   uci commit sms_forwarder && /etc/init.d/sms_forwarder restart
 uci -q batch <<'EOC'
@@ -77,7 +142,8 @@ uci -q batch <<'EOC'
 EOC
 uci -q commit sms_forwarder
 
-# IPv6 快失败 firewall include
+# ---------------------------------------------------------------- IPv6
+# IPv6 快失败 firewall include（国外 v6 毫秒级拒绝，回落 v4）
 uci -q delete firewall.v6fastfail 2>/dev/null
 uci -q batch <<-EOC
 	set firewall.v6fastfail=include
@@ -86,7 +152,7 @@ uci -q batch <<-EOC
 	set firewall.v6fastfail.enabled='1'
 EOC
 
-# odhcpd：IPv6 默认网关必须绕过 V1 检查（memory#10 的坑）
+# odhcpd：IPv6 默认网关必须绕过 V1 检查
 uci -q set dhcp.lan.ra_default='2'
 
 # 管理端口不要暴露到 WAN（面板 8001 / WS 8765 / ttyd 7681 / mihomo 9090）
