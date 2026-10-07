@@ -56,8 +56,26 @@ uci -q batch <<-EOC
 	set fancontrol.settings.curve='20:10,30:11,40:14,45:17,50:21,55:27,58:31,60:36,63:47,66:66,70:78,75:86,80:91,85:95,90:97,95:100,110:100'
 EOC
 
-# LAN 网段（现网是 192.168.88.1）；要保留新固件默认就别改
-# uci set network.lan.ipaddr='192.168.88.1'
+# LAN 网段：保持现网的 192.168.88.1（不要就删这两行）
+uci -q set network.lan.ipaddr='192.168.88.1'
+uci -q commit network
+
+# 短信转发（企业微信群机器人）骨架。webhook key 属于密钥，不入公开仓库，
+# 刷完后把占位符换成你的 key 即可（一条命令，见 README）：
+#   uci set sms_forwarder.wecom.api_config='{"webhook_url":"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=<你的key>"}'
+#   uci commit sms_forwarder && /etc/init.d/sms_forwarder restart
+uci -q batch <<'EOC'
+	set sms_forwarder.sms_forward=sms_forward
+	set sms_forwarder.sms_forward.enable='1'
+	set sms_forwarder.sms_forward.log_level='info'
+	set sms_forwarder.wecom=sms_forward_instance
+	set sms_forwarder.wecom.modem_cfg='2_1'
+	set sms_forwarder.wecom.poll_interval='20'
+	set sms_forwarder.wecom.api_type='wecom'
+	set sms_forwarder.wecom.enable='1'
+	set sms_forwarder.wecom.api_config='{"webhook_url":"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=REPLACE_WITH_YOUR_WECOM_KEY"}'
+EOC
+uci -q commit sms_forwarder
 
 # IPv6 快失败 firewall include
 uci -q delete firewall.v6fastfail 2>/dev/null

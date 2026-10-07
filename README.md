@@ -316,6 +316,25 @@ LuCI 里那个 `/admin/modem/modemwebui` 入口只是个 iframe 壳（3KB），�
   板级取值 51 = 20%），开机不再满转。
 - `ipk/` —— 厂商私有 feed 的 5 个面板包存档（内容已并进 h5000m-kit，编译不使用）。
 
+### 开机风扇时间线（H5000M）
+
+| 时间 | 状态 | 说明 |
+|---|---|---|
+| 0 ~ 约4.5s | **满转** | U-Boot/硬件默认，驱动没加载前软件够不着（改 U-Boot 才能动，不建议） |
+| 约4.5s | 降到 20%（pwm 51） | `modules-boot.d/60-hwmon-pwmfan` 让驱动提前加载；内核补丁让 probe 写 DTS 的 `pwm-fan,boot-duty` 而不是 255 |
+| 4.5s~36s | 约 4%（pwm 10） | 内核 step_wise 温控压到最低档（此时温度还凉） |
+| 约36s | 交给我们 | `/etc/init.d/fancontrol`(S99) 接管，按 max(CPU, WiFi) 走曲线，切 thermal_zone0 到 user_space |
+
+修改前满转要持续约 13 秒（驱动要到 S10boot 才加载，且 probe 写满 PWM）。
+
+### 刷完需要补的（含密钥/运行时配置，不入公开仓库）
+
+1. **企微 webhook key** —— uci-defaults 已写好骨架，把占位符换掉即可：
+   `uci set sms_forwarder.wecom.api_config='{"webhook_url":"…&key=<你的key>"}'; uci commit sms_forwarder; /etc/init.d/sms_forwarder restart`
+2. **OpenClash 配置层**（订阅 URL、`/etc/openclash/oc-config-{head,tail}.yaml`、`rule_provider/*`、
+   `custom/openclash_custom_overwrite.sh` 动态运营商 DNS 注入、dashboard 密码、`/etc/config/openclash`）
+3. **WiFi**（SSID/密码/信道/EHT 模式）与其它 `/etc/config/wireless` 微调
+
 ### 构建期补丁
 
 | 补丁 | 作用 |

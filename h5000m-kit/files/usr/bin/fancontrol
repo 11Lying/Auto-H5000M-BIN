@@ -25,6 +25,15 @@ is_num() { case "$1" in ''|*[!0-9-]*) return 1;; *) return 0;; esac; }
 ENABLE=$(uget enable);       [ "$ENABLE" = "0" ] && { log "disabled via config; exiting"; exit 0; }
 THERMAL=$(uget thermal_file);[ -n "$THERMAL" ] || THERMAL=/sys/class/thermal/thermal_zone0/temp
 FANFILE=$(uget fan_file);    [ -n "$FANFILE" ] || FANFILE=/sys/class/hwmon/hwmon2/pwm1
+# Robustness: prefer the hwmon node whose 'name' is 'pwmfan' (hwmon numbering can
+# shift between builds/firmwares).  Fall back to the configured/default path.
+for _h in /sys/class/hwmon/hwmon*; do
+	[ -r "$_h/name" ] || continue
+	if [ "$(cat "$_h/name" 2>/dev/null)" = "pwmfan" ] && [ -w "$_h/pwm1" ]; then
+		FANFILE="$_h/pwm1"
+		break
+	fi
+done
 MAXPWM=$(uget max_speed);    is_num "$MAXPWM"   || MAXPWM=255
 TEMPDIV=$(uget temp_div);    is_num "$TEMPDIV"  || TEMPDIV=1000
 CURVE=$(uget curve)
