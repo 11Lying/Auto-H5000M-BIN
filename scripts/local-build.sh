@@ -67,8 +67,8 @@ assert_h5000m_config() {
 }
 
 assert_h5000m_source_identity() {
-  local recipe='target/linux/mediatek/image/filogic.mk'
-  local dts='target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts'
+  local recipe="$ROOT_DIR/$SOURCE_DIR/target/linux/mediatek/image/filogic.mk"
+  local dts="$ROOT_DIR/$SOURCE_DIR/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts"
   [ -s "$recipe" ] || die "找不到 H5000M image recipe: $recipe"
   [ -s "$dts" ] || die "找不到 H5000M DTS: $dts"
   grep -q 'Device/hiveton_h5000m' "$recipe" || die "filogic image recipe 未定义 Device/hiveton_h5000m"
