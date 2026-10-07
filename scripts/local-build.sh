@@ -50,6 +50,32 @@ log()  { printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 warn() { printf '\n[%s] WARNING: %s\n' "$(date '+%H:%M:%S')" "$*" >&2; }
 die()  { printf '::error::H5000M build: %s\n' "$*" >&2; printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
+assert_h5000m_config() {
+  local cfg="$1"
+  [ -s "$cfg" ] || die "缺少配置文件：$cfg"
+  grep -qx 'CONFIG_TARGET_mediatek=y' "$cfg" || die "$cfg: TARGET 不是 mediatek"
+  grep -qx 'CONFIG_TARGET_mediatek_filogic=y' "$cfg" || die "$cfg: SUBTARGET 不是 filogic"
+  grep -qx 'CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton_h5000m=y' "$cfg" || die "$cfg: 未明确选择 Hiveton H5000M device profile"
+  grep -qx 'CONFIG_TARGET_BOARD="mediatek"' "$cfg" || die "$cfg: CONFIG_TARGET_BOARD 不正确"
+  grep -qx 'CONFIG_TARGET_SUBTARGET="filogic"' "$cfg" || die "$cfg: CONFIG_TARGET_SUBTARGET 不正确"
+  grep -qx 'CONFIG_TARGET_PROFILE="DEVICE_hiveton_h5000m"' "$cfg" || die "$cfg: CONFIG_TARGET_PROFILE 不正确"
+  local selected
+  selected="$(grep -E '^CONFIG_TARGET_mediatek_filogic_DEVICE_[^=]+=y$' "$cfg" || true)"
+  [ "$selected" = 'CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton_h5000m=y' ] || die "$cfg: 设备 profile 集合不唯一/错误：$selected"
+  grep -qx '# CONFIG_TARGET_mediatek_filogic_DEVICE_openwrt_one is not set' "$cfg" || die "$cfg: openwrt_one 未被明确排除"
+  if grep -Eq '^CONFIG_TARGET_mediatek_filogic_DEVICE_openwrt_one=y$' "$cfg"; then die "$cfg: 错误 profile openwrt_one 被选中"; fi
+}
+
+assert_h5000m_source_identity() {
+  local recipe='target/linux/mediatek/image/filogic.mk'
+  local dts='target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts'
+  [ -s "$recipe" ] || die "找不到 H5000M image recipe: $recipe"
+  [ -s "$dts" ] || die "找不到 H5000M DTS: $dts"
+  grep -q 'Device/hiveton_h5000m' "$recipe" || die "filogic image recipe 未定义 Device/hiveton_h5000m"
+  grep -q 'mt7987a-hiveton-h5000m' "$recipe" || die "H5000M image profile 未引用对应 DTS"
+  grep -q 'model = "Hiveton H5000M"' "$dts" || die "DTS model 不是 Hiveton H5000M"
+}
+
 # ---------------------------------------------------------------- 源码
 prepare_source() {
   log "源码：$REPO_URL ($REPO_BRANCH)"
@@ -66,6 +92,7 @@ prepare_source() {
     [ "$ok" = 1 ] || die "克隆失败：$REPO_URL"
   fi
   [ -f "$SOURCE_DIR/rules.mk" ] || die "$SOURCE_DIR 不像 OpenWrt 源码树"
+  assert_h5000m_source_identity
   echo "源码 HEAD: $(git -C "$SOURCE_DIR" rev-parse --short HEAD)"
 }
 
@@ -200,7 +227,11 @@ configure() {
   cd "$ROOT_DIR/$SOURCE_DIR"
   [ -f "$CONFIG_FILE" ] || die "配置文件不存在：$CONFIG_FILE"
   cp -f "$CONFIG_FILE" .config
+  # Fail before defconfig for a bad seed; then re-check the resolved Kconfig result.
+  grep -qx 'CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton_h5000m=y' .config || die "seed config 未选择 Hiveton H5000M"
   make defconfig || die "make defconfig 失败"
+  assert_h5000m_config .config
+  echo "H5000M profile hard-check: PASS"
   echo "---- 关键项 ----"
   grep -E '^CONFIG_(TARGET_mediatek_filogic_DEVICE_hiveton_h5000m|MTK_WIFI7_SKU_TYPE|WARP_CHIPSET|PACKAGE_(kmod-mt7992|kmod-mt_hwifi|kmod-mt_wifi7|kmod-mediatek_hnat|luci-app-mtwifi-cfg|mtwifi-cfg-ucode|h5000m-kit|luci-app-openclash|luci-app-qmodem-next))=' .config || true
 }
@@ -209,7 +240,7 @@ configure() {
 build() {
   cd "$ROOT_DIR/$SOURCE_DIR"
   log "编译（${THREADS} 线程）"
-  export CCACHE_DIR="${CCACHE_DIR:-$ROOT_DIR/$SOURCE_DIR/build_dir/ccache}"
+  export CCACHE_DIR="${CCACHE_DIR:-$ROOT_DIR/.ccache}"
   make -j"$THREADS" IGNORE_ERRORS=n || make -j1 V=s
 }
 
@@ -217,26 +248,29 @@ collect_artifacts() {
   log "收集产物"
   cd "$ROOT_DIR"
   rm -rf "$ARTIFACTS_DIR"; mkdir -p "$ARTIFACTS_DIR"
-  find "$SOURCE_DIR/bin/targets" -type f \( -name '*.bin' -o -name '*.img.gz' \) -exec cp -f {} "$ARTIFACTS_DIR/" \;
+  local target_dir="$SOURCE_DIR/bin/targets/mediatek/filogic"
+  [ -d "$target_dir" ] || die "未生成 mediatek/filogic target 目录"
+  assert_h5000m_config "$SOURCE_DIR/.config"
+  assert_h5000m_source_identity
+  local image_count=0 image
+  while IFS= read -r -d '' image; do
+    case "$(basename "$image")" in *hiveton_h5000m*) cp -f "$image" "$ARTIFACTS_DIR/"; image_count=$((image_count+1));; esac
+  done < <(find "$target_dir" -maxdepth 1 -type f \( -name '*.bin' -o -name '*.img*' -o -name '*.itb' -o -name '*.tar.gz' -o -name '*.ubi' \) -print0)
+  [ "$image_count" -gt 0 ] || die "medIATEK/filogic 下没有 Hiveton H5000M 命名的固件镜像（拒绝收集 generic/other profile）"
 
   # OpenWrt 的 manifest 文件名通常是 openwrt-*-manifest，未必包含设备名。
   # 不能用 *hiveton*h5000m*.manifest 限死，否则固件已生成时会在收集阶段误报失败。
   local manifest_src
-  manifest_src="$(find "$SOURCE_DIR/bin/targets" -type f -name '*.manifest' -print -quit)"
-  if [ -n "$manifest_src" ]; then
-    cp -f "$manifest_src" "$ARTIFACTS_DIR/openwrt-image.manifest"
-    log "  镜像清单：$manifest_src"
-  else
-    warn "未找到原生 .manifest，使用启用包清单生成校验清单"
-    {
-      echo "# Generated H5000M package manifest"
-      sed -n 's/^CONFIG_PACKAGE_\([^=]*\)=y$/\1 - built-in/p' "$SOURCE_DIR/.config" | sort
-    } > "$ARTIFACTS_DIR/openwrt-image.manifest"
-  fi
+  manifest_src="$target_dir/immortalwrt-mediatek-filogic-hiveton_h5000m.manifest"
+  [ -s "$manifest_src" ] || die "缺少 H5000M 原生 image manifest: $manifest_src"
+  cp -f "$manifest_src" "$ARTIFACTS_DIR/openwrt-image.manifest"
+  printf '%s\n' "$manifest_src" > "$ARTIFACTS_DIR/image-manifest-source.txt"
+  log "  H5000M 镜像清单：$manifest_src"
   [ -n "$(ls -A "$ARTIFACTS_DIR" 2>/dev/null)" ] || die "没找到固件产物"
   cp -f "$SOURCE_DIR/.config" "$ARTIFACTS_DIR/build.config"
+  { echo 'TARGET=mediatek'; echo 'SUBTARGET=filogic'; echo 'DEVICE=hiveton_h5000m'; echo 'DTS=mt7987a-hiveton-h5000m'; echo 'CONFIG_TARGET=CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton_h5000m'; } > "$ARTIFACTS_DIR/H5000M-IDENTITY.txt"
   grep '^CONFIG_PACKAGE_.*=y$' "$SOURCE_DIR/.config" | sort > "$ARTIFACTS_DIR/enabled-packages.txt"
-  find "$ARTIFACTS_DIR" -maxdepth 1 -type f \( -name '*.bin' -o -name '*.img.gz' \) -print0 \
+  find "$ARTIFACTS_DIR" -maxdepth 1 -type f \( -name '*.bin' -o -name '*.img*' -o -name '*.itb' -o -name '*.tar.gz' -o -name '*.ubi' \) -print0 \
     | xargs -0 -r sha256sum > "$ARTIFACTS_DIR/sha256sums.txt"
   { echo "ImmortalWrt 25.12 + MTK Wi-Fi7 SDK H5000M"; echo "time: $(date '+%F %T')"; echo "src: $REPO_URL ($REPO_BRANCH)"; } > "$ARTIFACTS_DIR/MANIFEST.txt"
   tar -czf artifacts.tar.gz "$ARTIFACTS_DIR"
@@ -247,6 +281,7 @@ main() {
   cd "$ROOT_DIR"
   command -v make >/dev/null || die "缺少 make"
   prepare_source
+  assert_h5000m_source_identity
   prepare_feeds
   apply_patches
   seed_kernel_config

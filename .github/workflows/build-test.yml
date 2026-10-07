@@ -135,7 +135,6 @@ env:
   REPO_URL: https://github.com/chasey-dev/immortalwrt-mt798x-rebase
   REPO_BRANCH: 25.12-dev-wifi7
   # 设备种子配置（仓库内，不再从网络拉取）
-  CONFIG_SEED: config/h5000m-25.12.seed
   SOURCE_DIR: immortalwrt
   TZ: Asia/Shanghai
   GOPROXY: https://goproxy.cn,https://proxy.golang.org,direct
@@ -190,19 +189,24 @@ jobs:
         run: |
           set -euo pipefail
           config="immortalwrt/.config"
-          [ -f "$config" ] || { echo "::error::❌ 未生成最终 .config"; exit 1; }
-          echo "=== 关键项 ==="
-          grep -E '^CONFIG_(TARGET_mediatek_filogic_DEVICE_hiveton_h5000m|MTK_WIFI7_SKU_TYPE|WARP_CHIPSET|PACKAGE_(kmod-mt7992|kmod-mt_hwifi|kmod-mt_wifi7|kmod-mediatek_hnat|luci-app-mtwifi-cfg|mtwifi-cfg-ucode|wifi-profile|h5000m-kit|luci-app-openclash|luci-app-qmodem-next|kmod-usb-net-qmi-wwan))=' "$config" || true
-          echo "=== 软提示（只警告不失败）==="
-          for p in h5000m-kit luci-app-qmodem-next luci-app-openclash kmod-mt7992 kmod-mt_hwifi luci-app-mtwifi-cfg; do
-            grep -qx "CONFIG_PACKAGE_${p}=y" "$config" || echo "::warning::配置里没有 CONFIG_PACKAGE_${p}=y"
-          done
+          [ -s "$config" ] || { echo "::error::❌ 未生成最终 .config"; exit 1; }
+          grep -qx 'CONFIG_TARGET_mediatek=y' "$config" || { echo "::error::TARGET 错误"; exit 1; }
+          grep -qx 'CONFIG_TARGET_mediatek_filogic=y' "$config" || { echo "::error::SUBTARGET 错误"; exit 1; }
+          grep -qx 'CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton_h5000m=y' "$config" || { echo "::error::未选择 Hiveton H5000M profile"; exit 1; }
+          grep -qx 'CONFIG_TARGET_PROFILE="DEVICE_hiveton_h5000m"' "$config" || { echo "::error::CONFIG_TARGET_PROFILE 错误"; exit 1; }
+          ! grep -qx 'CONFIG_TARGET_mediatek_filogic_DEVICE_openwrt_one=y' "$config" || { echo "::error::错误设备 profile openwrt_one"; exit 1; }
+          selected="$(grep -E '^CONFIG_TARGET_mediatek_filogic_DEVICE_[^=]+=y$' "$config" || true)"
+          [ "$selected" = 'CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton_h5000m=y' ] || { echo "::error::设备 profile 非唯一: $selected"; exit 1; }
+          echo "=== H5000M 关键项 ==="
+          grep -E '^CONFIG_(TARGET_(BOARD|SUBTARGET|PROFILE)|TARGET_mediatek_filogic_DEVICE_hiveton_h5000m|MTK_WIFI7_SKU_TYPE|WARP_CHIPSET|PACKAGE_(kmod-mt7992|kmod-mt_hwifi|kmod-mt_wifi7|kmod-mediatek_hnat|h5000m-kit|luci-app-openclash|luci-app-qmodem-next))=' "$config"
+          mkdir -p validation-artifacts
+          cp "$config" validation-artifacts/h5000m-config.txt
 
       - name: 上传最终配置
         uses: actions/upload-artifact@v4
         with:
           name: H5000M-config-validation
-          path: immortalwrt/.config
+          path: validation-artifacts/h5000m-config.txt
           retention-days: 7
 
   rootfs-preflight:
@@ -257,12 +261,15 @@ jobs:
           save: true
 
       - name: 恢复构建缓存
+        id: build-cache
         uses: actions/cache@v4
         with:
           path: |
             ${{ env.SOURCE_DIR }}/dl
             ${{ env.SOURCE_DIR }}/staging_dir/host
             ${{ env.SOURCE_DIR }}/build_dir/host
+            ${{ env.SOURCE_DIR }}/staging_dir/toolchain-*
+            ${{ env.SOURCE_DIR }}/build_dir/toolchain-*
           key: ${{ runner.os }}-preflight-${{ env.REPO_BRANCH }}-${{ hashFiles('feeds.conf.default', 'config/**', 'patches/**', 'h5000m-kit/**', 'scripts/local-build.sh') }}
           restore-keys: |
             ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-
@@ -474,12 +481,15 @@ jobs:
           save: true
 
       - name: 恢复构建缓存
+        id: build-cache
         uses: actions/cache@v4
         with:
           path: |
             ${{ env.SOURCE_DIR }}/dl
             ${{ env.SOURCE_DIR }}/staging_dir/host
             ${{ env.SOURCE_DIR }}/build_dir/host
+            ${{ env.SOURCE_DIR }}/staging_dir/toolchain-*
+            ${{ env.SOURCE_DIR }}/build_dir/toolchain-*
           key: ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-${{ hashFiles('feeds.conf.default', 'config/**', 'patches/**', 'h5000m-kit/**', 'scripts/local-build.sh') }}
           restore-keys: |
             ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-
@@ -503,7 +513,16 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="/usr/lib/ccache:$PATH"
+          export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
           export THREADS="$(nproc)"
+          components=()
+          for path in immortalwrt/dl immortalwrt/staging_dir/host immortalwrt/build_dir/host; do
+            [ -d "$path" ] && [ -n "$(find "$path" -mindepth 1 -print -quit 2>/dev/null)" ] && components+=("${path#immortalwrt/}")
+          done
+          for path in immortalwrt/staging_dir/toolchain-* immortalwrt/build_dir/toolchain-*; do
+            [ -d "$path" ] && [ -n "$(find "$path" -mindepth 1 -print -quit 2>/dev/null)" ] && components+=("${path#immortalwrt/}")
+          done
+          printf 'CACHED_COMPONENTS=%s\n' "${components[*]:-none}" | tee -a "$GITHUB_ENV"
           echo "🔨 调用 scripts/local-build.sh (${THREADS} threads)..."
           bash scripts/local-build.sh
 
@@ -518,16 +537,43 @@ jobs:
           fi
           config="artifacts/build.config"
           manifest="artifacts/openwrt-image.manifest"
-          [ -f "$config" ] || { echo "::error::❌ 未找到最终 .config"; exit 1; }
-          [ -f "$manifest" ] || { echo "::error::❌ 未找到 H5000M 镜像清单"; exit 1; }
-          echo "=== 关键项 ==="
-          grep -E '^CONFIG_(TARGET_mediatek_filogic_DEVICE_hiveton_h5000m|MTK_WIFI7_SKU_TYPE|WARP_CHIPSET|PACKAGE_(kmod-mt7992|kmod-mt_hwifi|kmod-mt_wifi7|kmod-mediatek_hnat|h5000m-kit|luci-app-openclash|luci-app-qmodem-next))=' "$config" || true
-          echo "=== 软提示（只警告不失败）==="
-          for p in h5000m-kit luci-app-qmodem-next luci-app-openclash kmod-mt7992; do
-            grep -q "^${p}[[:space:]-]" "$manifest" || echo "::warning::镜像清单里没有 $p"
-          done
-          [ -s artifacts/sha256sums.txt ] || { echo "::error::❌ 未找到固件 SHA256"; exit 1; }
+          identity="artifacts/H5000M-IDENTITY.txt"
+          manifest_source="artifacts/image-manifest-source.txt"
+          [ -s "$config" ] && [ -s "$manifest" ] && [ -s "$identity" ] && [ -s "$manifest_source" ] || { echo "::error::缺少 build config / 原生 image manifest / identity"; exit 1; }
+          grep -qx 'CONFIG_TARGET_mediatek=y' "$config"
+          grep -qx 'CONFIG_TARGET_mediatek_filogic=y' "$config"
+          grep -qx 'CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton_h5000m=y' "$config"
+          grep -qx 'CONFIG_TARGET_PROFILE="DEVICE_hiveton_h5000m"' "$config"
+          ! grep -qx 'CONFIG_TARGET_mediatek_filogic_DEVICE_openwrt_one=y' "$config"
+          [ "$(grep -Ec '^CONFIG_TARGET_mediatek_filogic_DEVICE_[^=]+=y$' "$config")" -eq 1 ]
+          grep -qx 'CONFIG_TARGET=CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton_h5000m' "$identity"
+          grep -qx 'DTS=mt7987a-hiveton_h5000m' "$identity" || grep -qx 'DTS=mt7987a-hiveton-h5000m' "$identity"
+          grep -qx 'immortalwrt/bin/targets/mediatek/filogic/immortalwrt-mediatek-filogic-hiveton_h5000m.manifest' "$manifest_source"
+          [ "$(basename "$manifest")" = openwrt-image.manifest ]
+          ls artifacts/*hiveton_h5000m* >/dev/null 2>&1 || { echo "::error::镜像文件名不含 Hiveton H5000M profile"; exit 1; }
+          for image in artifacts/*hiveton_h5000m*; do [ -s "$image" ] || exit 1; done
+          [ -s artifacts/sha256sums.txt ] || { echo "::error::缺少 SHA256"; exit 1; }
+          sha256sum -c artifacts/sha256sums.txt
+          echo "=== H5000M 强校验通过 ==="
+          echo "TARGET=mediatek"
+          echo "SUBTARGET=filogic"
+          echo "DEVICE=hiveton_h5000m"
+          echo "DTS=mt7987a-hiveton-h5000m"
+          echo "CONFIG_TARGET=CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton_h5000m"
+          echo "IMAGE=$(find artifacts -maxdepth 1 -type f -name '*hiveton_h5000m*' -printf '%f ' )"
+          cache_hit="${{ steps.build-cache.outputs.cache-hit }}"
+          if [ "$cache_hit" = true ]; then
+            echo "CACHE_HIT=exact-key"
+          elif [ -n "${CACHED_COMPONENTS:-}" ] && [ "$CACHED_COMPONENTS" != none ]; then
+            echo "CACHE_HIT=restore-key"
+          else
+            echo "CACHE_HIT=false"
+          fi
+          echo "CACHED_COMPONENTS=${CACHED_COMPONENTS:-none}"
+          echo "FINAL_SHA256:"
           cat artifacts/sha256sums.txt
+          echo "CCACHE_STATS:"
+          ccache -s || true
           ls -lh artifacts/
           echo "build_time=$(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$GITHUB_OUTPUT"
 
