@@ -25,15 +25,16 @@ ImmortalWrt 25.12 的仓库；`25.12-dev-wifi7` 分支带完整 MTK 闭源 Wi-Fi
 ## 关键文件
 
 ```
-config/h5000m-25.12.seed     设备种子 + MTK SDK 的 Kconfig 全量符号（★跟着 SDK 版本走，别按 24.10 名字改）
-h5000m.extra.config          其余功能包（OpenClash / QModem / 工具 / 冲突项屏蔽）
+config/h5000m-25.12.config   完整 .config（底稿=chasey 的 MT7987+MT7992 配置 → 设备换成 H5000M、
+                             SKU 改成 BE6500 → 追加我们的功能包。★SDK 符号整块保留，
+                             别按 24.10 基座的名字改）
 feeds.conf.default           openwrt-25.12 各 feed + QModem
 patches/
   dts-h5000m-fan-boot-duty.patch        给 &fan 加 pwm-fan,boot-duty=<51>（对 25.12 的 dts 重新生成过）
   999-h5000m-pwm-fan-boot-duty.kernel-patch  内核 pwm-fan.c 读该属性（6.12 上下文一致，原样可用）
   qmodem-*.patch                        QModem feed 的兼容补丁（打不上会跳过）
 h5000m-kit/                  家当（AT 双口隔离 / 面板 / QSCAN 前端 / 风扇 / IPv6 / 短信 / OpenClash 辅助）
-scripts/local-build.sh       构建脚本（本分支重写，适配 25.12/apk/新 SDK）
+scripts/local-build.sh       构建脚本（简单版：clone → feeds → 补丁/家当 → cp .config → defconfig → make）
 .github/workflows/build-test.yml  CI（push → config-validation；手动 dispatch → 真正编译）
 ```
 
@@ -44,6 +45,8 @@ scripts/local-build.sh       构建脚本（本分支重写，适配 25.12/apk/�
    `Run workflow` → 分支选 `wrt2512` → **把 `confirm_firmware_build` 勾成 true**。
    产物是 artifact `H5000M-firmware`（含 sysupgrade bin + manifest + build.config + sha256）。
 3. 本地手动：`bash scripts/local-build.sh --config-only` 只做配置；不加参数则整机编译。
+   流程和别的 H5000M 云编译仓库一样（`feeds update/install` → `cp config/… .config` → `make defconfig` → `make`），
+   不做符号强校验——kconfig 丢掉什么就以最终 `artifacts/build.config` 为准。
 
 ## 刷机前后
 
