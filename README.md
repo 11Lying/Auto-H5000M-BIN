@@ -312,6 +312,15 @@ Quectel RM502Q-AE）的全部自研改造固化进固件，刷机后不再需要
   板级取值 51 = 20%），开机不再满转。
 - `ipk/` —— 厂商私有 feed 的 5 个面板包存档（内容已并进 h5000m-kit，编译不使用）。
 
+### 构建期补丁
+
+| 补丁 | 作用 |
+|---|---|
+| `patches/dts-h5000m-fan-boot-duty.patch` | 板级 DTS 给 pwm-fan 加 `pwm-fan,boot-duty = <51>`（20%） |
+| `patches/999-h5000m-pwm-fan-boot-duty.kernel-patch` | pwm-fan probe 读上面的属性，取代"一加载就写满 PWM" |
+| `patch_qmodem_sms_tz()`（内联） | 给 QModem 的 `sms_forwarder_next` 打 +8h 时区修正。模组上报的 timestamp 是"本地时间当 UTC"，脚本又按本地时区格式化 → 晚 8 小时；上游只在 LuCI 前端 JS 里修，转发脚本一直没修。**打进 feed 源码而不是覆盖旧文件**，避免丢上游新功能 |
+| `patches/qmodem-voip-libwebsockets-full.patch` | 已成历史：2026-09-19 起 QModem 上游自带条件依赖，脚本自动识别并跳过 |
+
 ### 与 fork 默认行为的**有意**差异
 
 | 项 | 差异 | 原因 |

@@ -715,19 +715,26 @@ patch_qmodem_voip_libwebsockets_variant() {
   local patch_file="$ROOT_DIR/patches/qmodem-voip-libwebsockets-full.patch"
   local feed_dir="$ROOT_DIR/$SOURCE_DIR/feeds/qmodem"
   local source_file="$feed_dir/application/voipd/Makefile"
-  [ -f "$patch_file" ] || return 0
   [ -f "$source_file" ] || return 0
 
-  if patch -d "$feed_dir" -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+  # 2026-09-19 起 QModem 上游自己实现了这个需求，改成条件依赖：
+  #   +PACKAGE_libwebsockets-full:libwebsockets-full \
+  #   +!PACKAGE_libwebsockets-full:libwebsockets-openssl
+  # 即"若已选 libwebsockets-full 就用 full，否则用 openssl"。所以旧补丁
+  # （硬改 mbedtls -> full）已经没有上下文可打，而且也不该再打。
+  if grep -q 'PACKAGE_libwebsockets-full:libwebsockets-full' "$source_file"; then
+    log "QModem VoIP uses upstream conditional libwebsockets dependency; skipping patch"
+  elif [ -f "$patch_file" ] && patch -d "$feed_dir" -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
     log "Selecting libwebsockets-full for QModem VoIP compatibility with ttyd"
     patch -d "$feed_dir" -p1 < "$patch_file"
-  elif patch -d "$feed_dir" -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+  elif [ -f "$patch_file" ] && patch -d "$feed_dir" -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
     log "QModem VoIP libwebsockets-full selection already applied"
   else
-    die "Unable to apply QModem VoIP libwebsockets variant patch"
+    die "Unable to apply QModem VoIP libwebsockets variant patch (QModem feed changed?)"
   fi
 
-  grep -q '+libwebsockets-full' "$source_file" || \
+  # 验证：接受两种形态 —— 打过补丁的 "+libwebsockets-full" 或上游条件式
+  grep -qE '(\+libwebsockets-full|PACKAGE_libwebsockets-full:libwebsockets-full)' "$source_file" || \
     die "QModem VoIP libwebsockets-full selection verification failed"
   if grep -q '+libwebsockets-mbedtls' "$source_file"; then
     die "QModem VoIP still selects libwebsockets-mbedtls"
@@ -739,22 +746,48 @@ patch_qmodem_voip_libwebsockets_variant() {
 # omitting the post-2.14 assignment preserves the SIP daemon's MD5 behavior.
 patch_qmodem_sipd_pjproject_compat() {
   local patch_file="$ROOT_DIR/patches/qmodem-sipd-pjproject-2.14.patch"
-  local source_file="feeds/qmodem/application/qmodem_sipd/src/sip_consumer.c"
-  [ -f "$patch_file" ] || return 0
+  local feed_dir="$ROOT_DIR/$SOURCE_DIR/feeds/qmodem"
+  local source_file="$feed_dir/application/qmodem_sipd/src/sip_consumer.c"
   [ -f "$source_file" ] || return 0
 
-  if patch -d "$ROOT_DIR/$SOURCE_DIR/feeds/qmodem" -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+  # 2026-09-19 起上游已不再给 credential 赋 algorithm_type（新版 pjproject API），
+  # 旧补丁（删掉那一行）无上下文可打 —— 目的已达成，直接跳过。
+  if ! grep -q 'PJSIP_AUTH_ALGORITHM_MD5' "$source_file"; then
+    log "QModem SIP daemon already free of the post-2.14 algorithm_type assignment; skipping patch"
+  elif [ -f "$patch_file" ] && patch -d "$feed_dir" -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
     log "Applying QModem SIP daemon compatibility for pjproject 2.14"
-    patch -d "$ROOT_DIR/$SOURCE_DIR/feeds/qmodem" -p1 < "$patch_file"
-  elif patch -d "$ROOT_DIR/$SOURCE_DIR/feeds/qmodem" -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+    patch -d "$feed_dir" -p1 < "$patch_file"
+  elif [ -f "$patch_file" ] && patch -d "$feed_dir" -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
     log "QModem SIP daemon pjproject 2.14 compatibility already applied"
   else
-    die "Unable to apply QModem SIP daemon pjproject 2.14 compatibility patch"
+    log "WARNING: unable to apply QModem SIP daemon compatibility patch; continuing"
   fi
 
   if grep -q 'algorithm_type = PJSIP_AUTH_ALGORITHM_MD5' "$source_file"; then
     die "QModem SIP daemon pjproject 2.14 compatibility verification failed"
   fi
+}
+
+# 短信转发脚本的 +8 小时时区修正。
+# 背景：模组上报/服务端保存的 timestamp 是"本地墙上时间被当成 UTC"的 epoch
+# （比真实 epoch 大 28800），而脚本用 `date -d @ts` 又按本地时区格式化 → 结果晚 8 小时。
+# 上游只在 LuCI 前端 JS 里做 -28800，转发脚本始终没修。这里直接把补丁打进
+# feed 源码（而不是用旧文件覆盖），这样上游新增的功能不会丢。
+patch_qmodem_sms_tz() {
+  local f="$ROOT_DIR/$SOURCE_DIR/feeds/qmodem/application/sms_forwarder_next/files/sms_forwarder_next"
+  [ -f "$f" ] || { log "WARNING: sms_forwarder_next not found in QModem feed; SMS timezone fix skipped"; return 0; }
+
+  if grep -q 'timestamp - 28800' "$f"; then
+    log "sms_forwarder_next timezone fix already applied"
+    return 0
+  fi
+  if grep -q 'date -d @${timestamp}' "$f"; then
+    sed -i 's|date -d @${timestamp}|date -d @${timestamp - 28800}|' "$f"
+    log "Applied +8h timezone fix to sms_forwarder_next"
+  else
+    log "WARNING: sms_forwarder_next timezone pattern not found (QModem changed?); SMS timestamps may be 8h off"
+  fi
+  grep -q 'timestamp - 28800' "$f" || log "WARNING: sms_forwarder_next timezone fix verification failed"
 }
 
 # mt_wifi7's sta_mgmt_assoc.c references pStaCfg->wpa_supplicant_info in the
@@ -1161,6 +1194,7 @@ apply_package_fixes() {
     patch_qmodem_makefile
     patch_qmodem_voip_libwebsockets_variant
     patch_qmodem_sipd_pjproject_compat
+    patch_qmodem_sms_tz
   fi
 
   local ebtables_makefile="package/network/utils/ebtables/Makefile"

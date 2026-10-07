@@ -14,8 +14,9 @@ OVL=/usr/share/h5000m-kit/overlay
 #   /bin/sendat(+.real) —— AT 双口隔离 wrapper。feed 里另有一个同名的 sendat 包
 #                          （2024.01.22~624c58f6），已在本仓库 extra.config 里显式
 #                          关闭，这里再盖一次做保险。
-#   /usr/bin/sms_forwarder_next —— qmodem feed 的 sms-forwarder-next 包也提供它，
-#                          我们的版本含 +8h 时区修正。
+#   （sms_forwarder_next 的 +8h 时区修正已改为构建期打补丁，
+#     见 local-build.sh 的 patch_qmodem_sms_tz —— 不再用旧文件覆盖，
+#     以免丢掉 QModem 上游新增的功能。）
 # 面板 webui 前端没有竞争方（本包是唯一提供者），不需要在此重复。
 if [ -d "$OVL" ] ; then
 	log "injecting overlay files"
