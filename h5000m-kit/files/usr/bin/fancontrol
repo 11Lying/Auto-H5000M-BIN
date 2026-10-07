@@ -1,0 +1,225 @@
+#!/bin/sh
+# Lightweight fan controller for Hiveton H5000M.
+# Drop-in replacement for the stock /usr/bin/fancontrol: same UCI config
+# (config fancontrol 'settings'), same service name, same LuCI page.
+# Adds hysteresis, delayed spin-down and write-on-change; removes the stock
+# per-second redundant re-writes. Accepts the stock "-M <mode>" arg (ignored;
+# the active curve is always 'option curve', matching stock behaviour).
+#
+# Control loop: read temp -> curve -> up=immediate / down=hysteresis+delay ->
+# write only if target != current PWM -> sleep INTERVAL.
+#
+# Because the kernel step_wise governor drives the SAME pwm-fan cooling device
+# and would otherwise fight userspace for pwm1, this controller takes the CPU
+# thermal zone to the 'user_space' governor while running and restores the
+# original governor on exit. Kernel hot/critical trip protection is governor
+# independent and stays active.
+
+TAG=fancontrol
+
+log() { logger -t "$TAG" "$1"; }
+uget() { uci -q get "fancontrol.settings.$1"; }
+is_num() { case "$1" in ''|*[!0-9-]*) return 1;; *) return 0;; esac; }
+
+# -------- load config (with safe defaults) --------
+ENABLE=$(uget enable);       [ "$ENABLE" = "0" ] && { log "disabled via config; exiting"; exit 0; }
+THERMAL=$(uget thermal_file);[ -n "$THERMAL" ] || THERMAL=/sys/class/thermal/thermal_zone0/temp
+FANFILE=$(uget fan_file);    [ -n "$FANFILE" ] || FANFILE=/sys/class/hwmon/hwmon2/pwm1
+MAXPWM=$(uget max_speed);    is_num "$MAXPWM"   || MAXPWM=255
+TEMPDIV=$(uget temp_div);    is_num "$TEMPDIV"  || TEMPDIV=1000
+CURVE=$(uget curve)
+INTERVAL=$(uget interval);   is_num "$INTERVAL" || INTERVAL=5
+HYST=$(uget hysteresis);     is_num "$HYST"     || HYST=3
+DOWNDELAY=$(uget down_delay);is_num "$DOWNDELAY" || DOWNDELAY=30
+MINPWM=$(uget min_pwm);      is_num "$MINPWM"   || MINPWM=20
+SAFEPWM=$(uget fail_pwm);    is_num "$SAFEPWM"  || SAFEPWM=$(( MAXPWM * 60 / 100 ))
+
+# WiFi (mt7992) chip temperature. Read via `iwpriv <iface> stat` -> CurrentTemperature.
+# The effective temperature fed to the curve = max(cpu_temp, wifi_temp - wifi_offset).
+#   wifi_temp   : 1 = enable (default), 0 = ignore WiFi, CPU only (old behaviour)
+#   wifi_iface  : which radio to poll (default rai0 = 5G; ra0 = 2.4G)
+#   wifi_offset : subtracted from the raw WiFi reading before max() (default 0 = raw).
+#                 The WiFi chip idles ~12C hotter than the CPU; a positive offset
+#                 aligns the two baselines so the fan only reacts to real WiFi heat.
+WIFITEMP=$(uget wifi_temp);    [ "$WIFITEMP" = "0" ] || WIFITEMP=1
+WIFIIFACE=$(uget wifi_iface);  [ -n "$WIFIIFACE" ] || WIFIIFACE=rai0
+WIFIOFFSET=$(uget wifi_offset);is_num "$WIFIOFFSET" || WIFIOFFSET=0
+IWPRIV=$(command -v iwpriv 2>/dev/null); [ -n "$IWPRIV" ] || IWPRIV=/usr/sbin/iwpriv
+
+[ "$INTERVAL" -lt 2 ] && INTERVAL=2
+
+# Governor zone is discovered independently of thermal_file so a bad/edited
+# temp path can never disable the user_space takeover (which prevents the
+# kernel step_wise governor from fighting us for the same pwm-fan).
+find_gov_zone() {
+	fb=""
+	for z in /sys/class/thermal/thermal_zone*; do
+		[ -w "$z/policy" ] || continue
+		case " $(cat "$z/available_policies" 2>/dev/null) " in *" user_space "*) ;; *) continue;; esac
+		[ -z "$fb" ] && fb="$z"
+		case "$(cat "$z/type" 2>/dev/null)" in *cpu*|*soc*|*mt798*|*thermal*) echo "$z"; return;; esac
+	done
+	[ -n "$fb" ] && echo "$fb"
+}
+ZONE=$(find_gov_zone)
+[ -n "$ZONE" ] || ZONE=/sys/class/thermal/thermal_zone0
+POLICY_FILE="$ZONE/policy"
+
+# curve points as space-separated "temp:pct"
+CURVE_PTS=""
+oldifs=$IFS; IFS=,
+for pair in $CURVE; do
+	t=${pair%%:*}; p=${pair#*:}
+	is_num "$t" && is_num "$p" && CURVE_PTS="$CURVE_PTS $t:$p"
+done
+IFS=$oldifs
+if [ -z "$CURVE_PTS" ]; then
+	log "config error: empty/invalid curve; using safe pwm $SAFEPWM"
+fi
+
+# -------- governor ownership --------
+ORIG_POLICY=""
+take_governor() {
+	[ -w "$POLICY_FILE" ] || return 0
+	case " $(cat "$ZONE/available_policies" 2>/dev/null) " in *" user_space "*) ;; *) return 0;; esac
+	ORIG_POLICY=$(cat "$POLICY_FILE" 2>/dev/null)
+	[ "$ORIG_POLICY" = "user_space" ] && ORIG_POLICY=step_wise
+	[ "$(cat "$POLICY_FILE" 2>/dev/null)" = "user_space" ] || echo user_space > "$POLICY_FILE" 2>/dev/null
+}
+release_governor() {
+	[ -w "$POLICY_FILE" ] || return 0
+	r=${ORIG_POLICY:-step_wise}
+	case " $(cat "$ZONE/available_policies" 2>/dev/null) " in *" $r "*) ;; *) r=step_wise;; esac
+	echo "$r" > "$POLICY_FILE" 2>/dev/null
+}
+
+# -------- helpers --------
+curve_pwm() {  # $1 = temp C -> echoes pwm (0..MAXPWM)
+	temp=$1; prevT=""; prevP=""; pct=""
+	[ -n "$CURVE_PTS" ] || { echo "$SAFEPWM"; return; }
+	for pair in $CURVE_PTS; do
+		t=${pair%%:*}; p=${pair#*:}
+		if [ "$temp" -le "$t" ]; then
+			if [ -z "$prevT" ]; then pct=$p
+			else pct=$(( prevP + (temp - prevT) * (p - prevP) / (t - prevT) )); fi
+			echo $(( pct * MAXPWM / 100 )); return
+		fi
+		prevT=$t; prevP=$p
+	done
+	echo $(( prevP * MAXPWM / 100 ))
+}
+
+read_temp() {  # echoes integer C or returns 1
+	raw=$(cat "$THERMAL" 2>/dev/null) || return 1
+	case "$raw" in ''|*[!0-9-]*) return 1;; esac
+	c=$(( raw / TEMPDIV ))
+	[ "$c" -ge -10 ] && [ "$c" -le 150 ] || return 1
+	echo "$c"
+}
+
+read_wifi_temp() {  # echoes integer C (offset-adjusted) or returns 1
+	[ "$WIFITEMP" = 1 ] || return 1
+	[ -x "$IWPRIV" ] || return 1
+	line=$("$IWPRIV" "$WIFIIFACE" stat 2>/dev/null | grep -i CurrentTemperature | head -1)
+	[ -n "$line" ] || return 1
+	raw=$(echo "${line##*=}" | tr -cd '0-9')
+	[ -n "$raw" ] || return 1
+	c=$(( raw - WIFIOFFSET ))
+	[ "$c" -ge -10 ] && [ "$c" -le 150 ] || return 1
+	echo "$c $raw"          # adjusted raw
+}
+
+# Effective temperature = max(cpu, wifi-offset). Falls back to whichever source
+# is readable; returns 1 only when BOTH fail (then the caller holds last/safe pwm).
+# Echoes a triplet "<eff> <cpu|-> <wifiraw|->" so callers get the components too
+# (a function run inside $() cannot export vars back, hence the string return).
+read_eff_temp() {
+	cpu=$(read_temp) || cpu=""
+	wadj=""; wraw=""
+	if wout=$(read_wifi_temp); then wadj=${wout%% *}; wraw=${wout##* }; fi
+	if [ -n "$cpu" ] && [ -n "$wadj" ]; then
+		if [ "$wadj" -gt "$cpu" ]; then eff=$wadj; else eff=$cpu; fi
+	elif [ -n "$cpu" ]; then eff=$cpu
+	elif [ -n "$wadj" ]; then eff=$wadj
+	else return 1
+	fi
+	echo "$eff ${cpu:--} ${wraw:--}"
+}
+
+WRITE_FAIL_LOGGED=0
+write_pwm() {  # $1 = desired pwm; writes only if different from actual current
+	want=$1
+	[ "$want" -gt "$MAXPWM" ] && want=$MAXPWM
+	[ "$want" -lt 0 ] && want=0
+	[ "$want" -gt 0 ] && [ "$want" -lt "$MINPWM" ] && want=$MINPWM
+	cur=$(cat "$FANFILE" 2>/dev/null)
+	[ "$cur" = "$want" ] && return 0
+	if echo "$want" > "$FANFILE" 2>/dev/null; then
+		log "pwm ${cur:-?} -> $want ($(( want * 100 / MAXPWM ))%) eff=${LASTTEMP:-?}C cpu=${LASTCPU:-?} wifi=${LASTWIFIRAW:-?}"
+		WRITE_FAIL_LOGGED=0
+	else
+		[ "$WRITE_FAIL_LOGGED" = 0 ] && { log "ERROR writing PWM to $FANFILE"; WRITE_FAIL_LOGGED=1; }
+	fi
+}
+
+# -------- lifecycle --------
+trap 'release_governor; log "stopped"; exit 0' TERM INT
+trap 'release_governor' EXIT
+
+take_governor
+log "started (interval=${INTERVAL}s hysteresis=${HYST}C down_delay=${DOWNDELAY}s min_pwm=${MINPWM} safe_pwm=${SAFEPWM} governor=$(cat "$POLICY_FILE" 2>/dev/null))"
+
+TARGET=""
+DOWN_SINCE=0
+FAILS=0
+INFAIL=0
+LASTTEMP=""
+LASTCPU=""
+LASTWIFI=""
+LASTWIFIRAW=""
+
+# startup: control immediately
+if out=$(read_eff_temp); then
+	set -- $out; c=$1; LASTCPU=$2; LASTWIFIRAW=$3
+	LASTTEMP=$c; TARGET=$(curve_pwm "$c"); write_pwm "$TARGET"
+else
+	TARGET=$SAFEPWM; write_pwm "$TARGET"; INFAIL=1; FAILS=1
+	log "no valid temperature at startup; applied safe pwm $SAFEPWM"
+fi
+
+while :; do
+	sleep "$INTERVAL"
+	if out=$(read_eff_temp); then
+		set -- $out; c=$1; LASTCPU=$2; LASTWIFIRAW=$3
+		LASTTEMP=$c
+		[ "$INFAIL" = 1 ] && { log "temperature reading recovered (${c}C)"; INFAIL=0; }
+		FAILS=0
+		req=$(curve_pwm "$c")
+		if [ -z "$TARGET" ] || [ "$req" -ge "$TARGET" ]; then
+			# up-shift (or equal): respond immediately, cancel spin-down timer
+			TARGET=$req; DOWN_SINCE=0
+		else
+			# down-shift demand: apply hysteresis, then delay
+			cand=$(curve_pwm $(( c + HYST )))
+			if [ "$cand" -ge "$TARGET" ]; then
+				DOWN_SINCE=0                      # inside hysteresis band -> hold
+			else
+				now=$(date +%s)
+				[ "$DOWN_SINCE" = 0 ] && DOWN_SINCE=$now
+				if [ $(( now - DOWN_SINCE )) -ge "$DOWNDELAY" ]; then
+					TARGET=$cand; DOWN_SINCE=0
+				fi
+				# else: hold TARGET until the delay elapses
+			fi
+		fi
+		write_pwm "$TARGET"
+	else
+		FAILS=$(( FAILS + 1 ))
+		if [ "$INFAIL" = 0 ] && [ "$FAILS" -ge 3 ]; then
+			log "temperature read failing (${FAILS}x); holding pwm ${TARGET:-$SAFEPWM}"
+			INFAIL=1
+		fi
+		[ -z "$TARGET" ] && TARGET=$SAFEPWM
+		write_pwm "$TARGET"      # re-assert last good / safe value
+	fi
+done

@@ -1,0 +1,25 @@
+#!/bin/sh /etc/rc.common
+# qmi-recovery init: 事件驱动恢复 QMI WDS wedge
+START=95
+STOP=05
+USE_PROCD=1
+
+start_service() {
+    # 启动保护: 开机等待 qmodem 首次拨号成功后再进入监控
+    procd_open_instance
+    procd_set_param command /bin/sh -c '
+        sleep 120
+        i=0
+        while [ $i -lt 60 ]; do
+            if grep -qE "WdsConnectionIPv4Handle|WdsConnectionIPv6Handle" /tmp/run/qmodem/2_1_dir/dial_log 2>/dev/null; then break; fi
+            sleep 5; i=$((i+1))
+        done
+        exec /usr/bin/qmi-recovery.sh
+    '
+    procd_set_param respawn 3600 15 10
+    procd_close_instance
+}
+
+stop_service() {
+    return 0
+}

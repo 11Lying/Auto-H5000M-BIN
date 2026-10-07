@@ -1102,6 +1102,47 @@ remove_h5000m_original_modem_ui() {
   fi
 }
 
+# =====================================================================
+# h5000m-kit : 把 H5000M 的全部定制（AT 双口隔离 / 短信转发 / QSCAN 前端 /
+# 风扇控制器 / IPv6 快失败 / ModemWebUI 面板整套）作为 OpenWrt 包烤进固件。
+# 包放在仓库根的 h5000m-kit/（仓库 .gitignore 忽略了 package/，所以不能直接提交到源码树）。
+# =====================================================================
+stage_h5000m_kit() {
+  local src="$ROOT_DIR/h5000m-kit"
+  local dst="$ROOT_DIR/$SOURCE_DIR/package/h5000m-kit"
+  [ -d "$src" ] || { log "WARNING: h5000m-kit package missing at $src"; return 0; }
+  rm -rf "$dst"
+  mkdir -p "$dst"
+  cp -a "$src/." "$dst/"
+  log "Staged h5000m-kit package ($(find "$dst" -type f | wc -l) files)"
+}
+
+# 风扇内核补丁：pwm-fan probe 原本 set_pwm(MAX_PWM)=加载瞬间 100%，
+# 补丁改成读 DTS 的 pwm-fan,boot-duty（板级 DTS 给 51 = 20%）。
+stage_fan_kernel_patch() {
+  local p="$ROOT_DIR/patches/999-h5000m-pwm-fan-boot-duty.kernel-patch"
+  local d="$ROOT_DIR/$SOURCE_DIR/target/linux/mediatek/patches-6.6"
+  [ -f "$p" ] || { log "WARNING: fan kernel patch missing at $p"; return 0; }
+  mkdir -p "$d"
+  cp -a "$p" "$d/999-h5000m-pwm-fan-boot-duty.patch"
+  log "Staged 999-h5000m-pwm-fan-boot-duty.patch"
+}
+
+# 板级 DTS：给 pwm-fan 节点加 pwm-fan,boot-duty（配合上面的内核补丁）
+patch_h5000m_fan_dts() {
+  local patch_file="$ROOT_DIR/patches/dts-h5000m-fan-boot-duty.patch"
+  [ -f "$patch_file" ] || { log "WARNING: DTS fan patch missing"; return 0; }
+
+  if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+    patch -p1 < "$patch_file"
+    log "Applied H5000M fan boot-duty DTS patch"
+  elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+    log "H5000M fan boot-duty DTS patch already applied"
+  else
+    log "WARNING: unable to apply H5000M fan boot-duty DTS patch (upstream DTS changed?)"
+  fi
+}
+
 apply_package_fixes() {
   log "Applying package fixes"
   cd "$ROOT_DIR/$SOURCE_DIR"
@@ -1113,6 +1154,7 @@ apply_package_fixes() {
   patch_mtwifi_apcli_bssid_budget
   verify_mtwifi_patch
   patch_mtk_hnat_local_dest
+  patch_h5000m_fan_dts
   patch_mtwifi7_sta_mgmt_assoc_hostapd_guard
   ensure_external_luci_i18n_packages
   if is_true "$ENABLE_QMODEM"; then
@@ -2527,6 +2569,8 @@ main() {
   show_features
   prepare_source
   prepare_feeds
+  stage_h5000m_kit
+  stage_fan_kernel_patch
   apply_package_fixes
   install_selected_packages
   configure_build

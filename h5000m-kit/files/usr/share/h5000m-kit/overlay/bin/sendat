@@ -1,0 +1,123 @@
+#!/bin/sh
+# sendat wrapper v4:
+#   - webui-origin AT routed to the webui AT port (ttyUSB2) + flock serialisation
+#   - QSCAN control protocol (AT+QSCANCTL=...) handled locally, NEVER sent to modem
+#   - while a QSCAN task holds ttyUSB2, ordinary webui AT returns BUSY (no serial touch)
+# Non-webui / non-numeric / plain AT paths keep the original behaviour untouched.
+REAL=/bin/sendat.real
+WEBUI_NUM_FILE=/run/rm502q-at/webui
+WEBUI_LOCK=/tmp/rm502q-webui-at.lock
+QDIR=/tmp/qscan
+QRUN=/usr/libexec/qscan/qscan-run.sh
+[ -x "$REAL" ] || { echo "sendat.real missing"; exit 127; }
+
+is_from_webui() {
+  local pid=$PPID depth=0 cmd
+  while [ "$pid" -gt 1 ] && [ "$depth" -lt 6 ]; do
+    cmd=$(tr "\0" " " < /proc/$pid/cmdline 2>/dev/null)
+    case "$cmd" in *webuiserver*) return 0 ;; esac
+    pid=$(awk "{print \$4}" /proc/$pid/stat 2>/dev/null)
+    [ -z "$pid" ] && break
+    depth=$((depth+1))
+  done
+  return 1
+}
+
+# scanning indicator is valid only if the recorded job PID is still alive
+scan_active() {
+  [ -f "$QDIR/scanning" ] || return 1
+  local p; p=$(cat "$QDIR/scanning" 2>/dev/null)
+  case "$p" in ""|*[!0-9]*) rm -f "$QDIR/scanning"; return 1 ;; esac
+  if [ -d "/proc/$p" ]; then return 0; fi
+  rm -f "$QDIR/scanning"; return 1     # stale -> clear
+}
+
+meta_get() { # meta_get <taskdir> <key>
+  grep "^$2=" "$1/meta" 2>/dev/null | head -1 | cut -d= -f2-
+}
+
+emit_ok()  { printf '%b\r\nOK\r\n' "$1"; }
+
+qscanctl() {
+  # $1 = full command string, e.g. AT+QSCANCTL=start,nr
+  local arg="${1#AT+QSCANCTL=}"
+  local op="${arg%%,*}"
+  local rest=""; case "$arg" in *,*) rest="${arg#*,}";; esac
+  mkdir -p "$QDIR/tasks" 2>/dev/null
+  case "$op" in
+    start)
+      local mode="$rest" num
+      case "$mode" in
+        lte) num=1 ;; nr) num=2 ;; all) num=3 ;;
+        *) emit_ok "\r\n+QSCANCTL: start,error,bad_mode"; return 0 ;;
+      esac
+      if scan_active; then
+        local cur; cur=$(cat "$QDIR/current" 2>/dev/null)
+        emit_ok "\r\n+QSCANCTL: start,$cur,busy"
+        return 0
+      fi
+      local tid; tid="$(date +%s)$(( $$ % 1000 ))"
+      setsid "$QRUN" "$num" "$mode" "$tid" </dev/null >/dev/null 2>&1 &
+      emit_ok "\r\n+QSCANCTL: start,$tid,running"
+      return 0 ;;
+    status)
+      local tid="$rest"
+      [ -n "$tid" ] || tid=$(cat "$QDIR/current" 2>/dev/null)
+      local td="$QDIR/tasks/$tid"
+      if [ -z "$tid" ] || [ ! -f "$td/meta" ]; then
+        emit_ok "\r\n+QSCANCTL: status,none,,idle,0,0,"
+        return 0
+      fi
+      local st mode ncells net started elapsed
+      st=$(meta_get "$td" status); mode=$(meta_get "$td" mode)
+      ncells=$(meta_get "$td" ncells); net=$(meta_get "$td" network_status)
+      started=$(meta_get "$td" started_at); elapsed=$(meta_get "$td" elapsed)
+      case "$st" in
+        running|recovering_network|scan_complete)
+          [ -n "$started" ] && elapsed=$(( $(date +%s) - started )) ;;
+      esac
+      emit_ok "\r\n+QSCANCTL: status,$tid,$mode,$st,${elapsed:-0},${ncells:-0},${net}"
+      return 0 ;;
+    result)
+      local tid="$rest"
+      [ -n "$tid" ] || tid=$(cat "$QDIR/current" 2>/dev/null)
+      local td="$QDIR/tasks/$tid"
+      if [ -n "$tid" ] && [ -f "$td/cells.txt" ]; then
+        printf '\r\n'; cat "$td/cells.txt"; printf '\r\nOK\r\n'
+      else
+        emit_ok ""
+      fi
+      return 0 ;;
+    *)
+      emit_ok "\r\n+QSCANCTL: error,unknown_op"
+      return 0 ;;
+  esac
+}
+
+# --- QSCAN control protocol (handled for any caller; never reaches the modem) ---
+case "$2" in
+  AT+QSCANCTL=*|at+qscanctl=*) qscanctl "$2"; exit 0 ;;
+esac
+
+# --- ordinary path ---
+N="$1"
+case "$N" in
+  ""|*[!0-9]*) exec "$REAL" "$@" ;;
+esac
+
+if is_from_webui; then
+  # A QSCAN task owns ttyUSB2 right now -> do not touch the serial, report BUSY fast
+  if scan_active; then
+    printf '\r\n+QSCANCTL: busy\r\n\r\nBUSY\r\n'
+    exit 0
+  fi
+  WNUM=$(cat "$WEBUI_NUM_FILE" 2>/dev/null)
+  case "$WNUM" in
+    ""|*[!0-9]*) echo "AT ERROR: webui role not ready" >&2; exit 3 ;;
+  esac
+  shift
+  flock -x "$WEBUI_LOCK" "$REAL" "$WNUM" "$@"
+  exit $?
+else
+  exec "$REAL" "$@"
+fi

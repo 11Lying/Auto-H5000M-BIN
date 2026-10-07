@@ -1,0 +1,66 @@
+#!/bin/sh
+# rm502q-at-map: 按 USB interface 稳定身份解析 RM502Q-AE 两个 AT 角色的当前 ttyUSB
+#   qmodem role -> USB interface 2-1:1.3 ; webui role -> USB interface 2-1:1.2
+# 输出 /run/rm502q-at/{qmodem,webui}(纯编号) + 调试软链
+# 并同步 qmodem.valid_at_ports = 仅 qmodem 口(把 webui 口从 qmodem 池摘除, 保证 at-daemon 不占 webui 口)
+# 退出码 0成功 2缺口 3冲突 4模组缺失
+RUNDIR=/run/rm502q-at
+USBROOT=/sys/bus/usb/devices
+IF_QMODEM=2-1:1.3
+IF_WEBUI=2-1:1.2
+LOG=/tmp/rm502q-at-map.log
+log(){ echo "$(date +%H:%M:%S) $*" >> "$LOG"; }
+
+if [ "$(cat $USBROOT/2-1/idVendor 2>/dev/null)" != "2c7c" ]; then
+  log "ERR modem 2c7c not present"; exit 4
+fi
+resolve_tty(){
+  local d="$USBROOT/$1"; [ -d "$d" ] || return 1
+  local t=$(ls "$d" 2>/dev/null | grep -oE "ttyUSB[0-9]+" | head -1)
+  [ -z "$t" ] && t=$(ls "$d"/ttyUSB*/ 2>/dev/null | grep -oE "ttyUSB[0-9]+" | head -1)
+  echo "$t"
+}
+TTY_Q=$(resolve_tty "$IF_QMODEM")
+TTY_W=$(resolve_tty "$IF_WEBUI")
+
+if [ -z "$TTY_Q" ] || [ ! -e "/dev/$TTY_Q" ]; then
+  log "WAIT qmodem iface tty missing (got=$TTY_Q)"; exit 2
+fi
+
+mkdir -p "$RUNDIR"
+NUM_Q=$(echo "$TTY_Q" | grep -oE "[0-9]+")
+echo "$NUM_Q" > "$RUNDIR/qmodem"
+ln -sf "/dev/$TTY_Q" /dev/rm502q-at-qmodem
+
+# 同步 qmodem 池: at_port 与 valid_at_ports 只保留 qmodem 口(排除 webui 口)
+sync_qmodem_cfg(){
+  local want_at="/dev/$TTY_Q"
+  local cur_at=$(uci -q get qmodem.2_1.at_port)
+  local cur_valid=$(uci -q get qmodem.2_1.valid_at_ports)
+  local changed=0
+  [ "$cur_at" != "$want_at" ] && { uci set qmodem.2_1.at_port="$want_at"; changed=1; }
+  if [ "$cur_valid" != "$want_at" ]; then
+    uci -q delete qmodem.2_1.valid_at_ports
+    uci add_list qmodem.2_1.valid_at_ports="$want_at"
+    changed=1
+  fi
+  [ "$changed" = "1" ] && { uci commit qmodem; log "qmodem cfg synced at_port/valid=$want_at"; }
+}
+sync_qmodem_cfg
+
+if [ -z "$TTY_W" ] || [ ! -e "/dev/$TTY_W" ]; then
+  log "WAIT webui iface $IF_WEBUI tty missing (got=$TTY_W)"
+  rm -f "$RUNDIR/webui" /dev/rm502q-at-webui
+  exit 2
+fi
+if [ "$TTY_Q" = "$TTY_W" ]; then
+  log "ERR role collision both -> $TTY_Q"
+  rm -f "$RUNDIR/webui" /dev/rm502q-at-webui
+  exit 3
+fi
+NUM_W=$(echo "$TTY_W" | grep -oE "[0-9]+")
+echo "$NUM_W" > "$RUNDIR/webui"
+ln -sf "/dev/$TTY_W" /dev/rm502q-at-webui
+ubus call at-daemon close "{\"at_port\":\"/dev/$TTY_W\"}" >/dev/null 2>&1
+log "OK qmodem=$TTY_Q(1.3) webui=$TTY_W(1.2) closed-atd-webui"
+exit 0

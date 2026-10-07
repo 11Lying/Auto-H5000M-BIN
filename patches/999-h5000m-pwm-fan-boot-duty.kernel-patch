@@ -1,0 +1,27 @@
+--- a/drivers/hwmon/pwm-fan.c
++++ b/drivers/hwmon/pwm-fan.c
+@@ -530,8 +530,23 @@
+ 	/*
+ 	 * Set duty cycle to maximum allowed and enable PWM output as well as
+ 	 * the regulator. In case of error nothing is changed
++	 *
++	 * h5000m: starting at 100% duty makes the H5000M fan blow at full
++	 * speed from module load until userspace takes over (~30s). Allow the
++	 * board DTS to request a quieter startup duty ("pwm-fan,boot-duty").
++	 * Without that property the upstream behaviour (MAX_PWM) is kept.
+ 	 */
+-	ret = set_pwm(ctx, MAX_PWM);
++	{
++		u32 boot_duty = MAX_PWM;
++
++		if (of_property_read_u32(dev->of_node, "pwm-fan,boot-duty",
++					 &boot_duty))
++			boot_duty = MAX_PWM;
++		if (boot_duty > MAX_PWM)
++			boot_duty = MAX_PWM;
++
++		ret = set_pwm(ctx, boot_duty);
++	}
+ 	if (ret) {
+ 		dev_err(dev, "Failed to configure PWM: %d\n", ret);
+ 		return ret;
