@@ -104,8 +104,13 @@ done
 
 log()  { printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 warn() { printf '\n[%s] WARNING: %s\n' "$(date '+%H:%M:%S')" "$*" >&2; }
-die()  { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
+# GitHub Actions 注解通道：`::error::xxx` 会被 GitHub 记成 annotation，
+# 而 annotations 是**匿名可读**的（/check-runs/<job>/annotations）——CI 失败时
+# 不必翻日志就能拿到确切原因。
+emit_ann() { printf '::error::%s\n' "$*" >&2; }
+die()  { emit_ann "H5000M: $*"; printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 is_true() { case "${1:-}" in 1|true|TRUE|yes|YES|on) return 0 ;; *) return 1 ;; esac; }
+trap 'rc=$?; [ "$rc" -eq 0 ] || printf "::warning::local-build.sh: step failed at line %s (rc=%s): %s\n" "$LINENO" "$rc" "$BASH_COMMAND" >&2' ERR
 
 run_with_timeout() {
   local t="$1" label="$2"; shift 2
@@ -316,11 +321,27 @@ ensure_no_duplicate_qmi_driver() {
   fi
 }
 
+# luci-app-mtwifi-cfg（MTK 无线 LuCI 页）在 25.12 里还带着两个**已经不存在的**
+# 依赖：rpcd-mod-ucode / rpcd-mod-iwinfo（25.12 把这两个模块并进了 rpcd 本体与
+# iwinfo-ucode 包）。不去掉的话该包的依赖永远不满足，kconfig 会静默丢弃它，
+# 无线页面就没了。页面自身的 RPC 后端是它自带的 usr/share/rpcd/ucode/luci.mtwifi。
+patch_mtwifi_luci_deps() {
+  local f="$ROOT_DIR/$SOURCE_DIR/package/mtk/applications/luci-app-mtwifi-cfg/Makefile"
+  [ -f "$f" ] || { warn "luci-app-mtwifi-cfg Makefile not found; skipping dep fix"; return 0; }
+  if grep -q 'rpcd-mod-ucode\|rpcd-mod-iwinfo' "$f"; then
+    sed -i 's/ +rpcd-mod-ucode//g; s/ +rpcd-mod-iwinfo//g; s/+rpcd-mod-ucode//g; s/+rpcd-mod-iwinfo//g' "$f"
+    log "luci-app-mtwifi-cfg: dropped dead deps (rpcd-mod-ucode/rpcd-mod-iwinfo 在 25.12 已并入 rpcd/iwinfo-ucode)"
+  else
+    log "luci-app-mtwifi-cfg deps already clean"
+  fi
+}
+
 apply_patches() {
   log "Applying H5000M patches"
   cd "$ROOT_DIR/$SOURCE_DIR"
   stage_fan_kernel_patch
   patch_h5000m_fan_dts
+  patch_mtwifi_luci_deps
   if is_true "$ENABLE_QMODEM"; then
     patch_qmodem_voip_libwebsockets_variant
     patch_qmodem_sipd_pjproject_compat
@@ -416,6 +437,14 @@ configure_build() {
   grep -E '^CONFIG_(TARGET_mediatek_filogic_DEVICE_hiveton_h5000m|MTK_WIFI7_SKU_TYPE|WARP_CHIPSET|first_card_main_ifname|PACKAGE_(h5000m-kit|luci-app-qmodem-next|luci-app-openclash|kmod-mt7992|kmod-mt_hwifi|kmod-mt_wifi7|kmod-mediatek_hnat|kmod-warp|luci-app-turboacc-mtk|kmod-hwmon-pwmfan|kmod-qmi_wwan_q|quectel-CM-5G-M|kmod-usb-net-qmi-wwan|wpad-openssl|dnsmasq-full))=' .config | sort
 }
 
+# 失败诊断：把某符号在 kconfig 里的 depends/select 块压成一行，便于走 annotation。
+symbol_kconfig_deps() {  # <CONFIG_SYMBOL>
+  local sym="${1#CONFIG_}" f="tmp/.config-package.in"
+  [ -f "$f" ] || { echo "(no .config-package.in)"; return 0; }
+  awk -v s="config $sym" '$0==s{found=1} found{print} found&&/^$/{exit}' "$f" \
+    | tr '\n' ';' | sed 's/; */;/g' | cut -c1-500
+}
+
 verify_final_config() {
   cd "$ROOT_DIR/$SOURCE_DIR"
   local required=(
@@ -443,11 +472,6 @@ verify_final_config() {
   is_true "$ENABLE_OPENCLASH" && required+=('CONFIG_PACKAGE_luci-app-openclash=y' 'CONFIG_PACKAGE_ruby-yaml=y')
   is_true "$ENABLE_QMODEM_NEXT" && required+=('CONFIG_PACKAGE_luci-app-qmodem-next=y' 'CONFIG_PACKAGE_qmodem=y')
 
-  local s
-  for s in "${required[@]}"; do
-    grep -qx "$s" .config || die "final .config is missing required symbol: $s"
-  done
-
   # 明确不能出现的（会抢 pwm1 / 换掉我们的 AT wrapper / 冲突驱动 / 两套 SDK 页）
   local forbidden=(
     'CONFIG_PACKAGE_luci-app-Airpifanctrl=y'
@@ -461,9 +485,34 @@ verify_final_config() {
     'CONFIG_PACKAGE_kmod-mt7996e=y'
     'CONFIG_PACKAGE_kmod-mt7992-23-firmware=y'
   )
-  for s in "${forbidden[@]}"; do
-    if grep -qx "$s" .config; then die "forbidden symbol is enabled: $s"; fi
+
+  # 一次报全部问题（别让 CI 每轮只暴露一个），并把依赖细节写进 annotation
+  local missing=() problems=() s
+  for s in "${required[@]}"; do
+    grep -qx "$s" .config || missing+=("$s")
   done
+  for s in "${forbidden[@]}"; do
+    if grep -qx "$s" .config; then problems+=("FORBIDDEN $s"); fi
+  done
+
+  if [ "${#missing[@]}" -gt 0 ] || [ "${#problems[@]}" -gt 0 ]; then
+    emit_ann "final config verification failed: ${#missing[@]} missing, ${#problems[@]} forbidden"
+    local i=0
+    for s in "${missing[@]:-}"; do
+      [ -n "$s" ] || continue
+      emit_ann "MISSING $s"
+      # 依赖细节只给前 6 个符号，避免 annotation 数量超限
+      if [ "$i" -lt 6 ]; then
+        emit_ann "    deps: $(symbol_kconfig_deps "$s")"
+      fi
+      i=$((i + 1))
+    done
+    for s in "${problems[@]:-}"; do
+      [ -n "$s" ] || continue
+      emit_ann "PROBLEM $s"
+    done
+    die "final .config verification failed: ${missing[*]:-} ${problems[*]:-}"
+  fi
 }
 
 # ------------------------------------------------------------------ 编译

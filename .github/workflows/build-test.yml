@@ -190,7 +190,7 @@ jobs:
         run: |
           set -euo pipefail
           config="immortalwrt/.config"
-          [ -f "$config" ] || { echo "❌ 未生成最终 .config"; exit 1; }
+          [ -f "$config" ] || { echo "::error::❌ 未生成最终 .config"; exit 1; }
           required=(
             'CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton_h5000m=y'
             'CONFIG_PACKAGE_kmod-mt7992=y'
@@ -232,11 +232,11 @@ jobs:
             'fancontrol'
           )
           for symbol in "${required[@]}"; do
-            grep -qx "$symbol" "$config" || { echo "❌ 缺少最终配置: $symbol"; exit 1; }
+            grep -qx "$symbol" "$config" || { echo "::error::❌ 缺少最终配置: $symbol"; exit 1; }
           done
           for package in "${disabled[@]}"; do
             if grep -qx "CONFIG_PACKAGE_${package}=y" "$config"; then
-              echo "❌ 非目标组件仍被启用: $package"
+              echo "::error::❌ 非目标组件仍被启用: $package"
               exit 1
             fi
           done
@@ -557,13 +557,13 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -d artifacts ] || [ -z "$(ls -A artifacts 2>/dev/null)" ]; then
-            echo "❌ 未找到任何产物"
+            echo "::error::❌ 未找到任何产物"
             exit 1
           fi
           config="artifacts/build.config"
           manifest="artifacts/openwrt-image.manifest"
-          [ -f "$config" ] || { echo "❌ 未找到最终 .config"; exit 1; }
-          [ -f "$manifest" ] || { echo "❌ 未找到 H5000M 镜像清单"; exit 1; }
+          [ -f "$config" ] || { echo "::error::❌ 未找到最终 .config"; exit 1; }
+          [ -f "$manifest" ] || { echo "::error::❌ 未找到 H5000M 镜像清单"; exit 1; }
           for symbol in \
             'CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton_h5000m=y' \
             'CONFIG_MTK_HWIFI_MT7992=y' \
@@ -579,12 +579,12 @@ jobs:
             'CONFIG_PACKAGE_h5000m-kit=y' \
             'CONFIG_PACKAGE_luci-app-qmodem-next=y' \
             'CONFIG_PACKAGE_luci-app-openclash=y'; do
-            grep -qx "$symbol" "$config" || { echo "❌ 缺少最终配置: $symbol"; exit 1; }
+            grep -qx "$symbol" "$config" || { echo "::error::❌ 缺少最终配置: $symbol"; exit 1; }
           done
           for package in kmod-mt7992 kmod-mt_hwifi kmod-mt_wifi7 kmod-mediatek_hnat kmod-warp kmod-hwmon-pwmfan h5000m-kit luci-app-turboacc-mtk luci-app-qmodem-next luci-app-openclash; do
-            grep -q "^${package}[[:space:]-]" "$manifest" || { echo "❌ 镜像清单缺少: $package"; exit 1; }
+            grep -q "^${package}[[:space:]-]" "$manifest" || { echo "::error::❌ 镜像清单缺少: $package"; exit 1; }
           done
-          [ -s artifacts/sha256sums.txt ] || { echo "❌ 未找到固件 SHA256"; exit 1; }
+          [ -s artifacts/sha256sums.txt ] || { echo "::error::❌ 未找到固件 SHA256"; exit 1; }
           cat artifacts/sha256sums.txt
           ls -lh artifacts/
           echo "build_time=$(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$GITHUB_OUTPUT"
