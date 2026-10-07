@@ -218,7 +218,21 @@ collect_artifacts() {
   cd "$ROOT_DIR"
   rm -rf "$ARTIFACTS_DIR"; mkdir -p "$ARTIFACTS_DIR"
   find "$SOURCE_DIR/bin/targets" -type f \( -name '*.bin' -o -name '*.img.gz' \) -exec cp -f {} "$ARTIFACTS_DIR/" \;
-  find "$SOURCE_DIR/bin/targets" -type f -name '*hiveton*h5000m*.manifest' -exec cp -f {} "$ARTIFACTS_DIR/openwrt-image.manifest" \; -quit
+
+  # OpenWrt 的 manifest 文件名通常是 openwrt-*-manifest，未必包含设备名。
+  # 不能用 *hiveton*h5000m*.manifest 限死，否则固件已生成时会在收集阶段误报失败。
+  local manifest_src
+  manifest_src="$(find "$SOURCE_DIR/bin/targets" -type f -name '*.manifest' -print -quit)"
+  if [ -n "$manifest_src" ]; then
+    cp -f "$manifest_src" "$ARTIFACTS_DIR/openwrt-image.manifest"
+    log "  镜像清单：$manifest_src"
+  else
+    warn "未找到原生 .manifest，使用启用包清单生成校验清单"
+    {
+      echo "# Generated H5000M package manifest"
+      sed -n 's/^CONFIG_PACKAGE_\([^=]*\)=y$/\1 - built-in/p' "$SOURCE_DIR/.config" | sort
+    } > "$ARTIFACTS_DIR/openwrt-image.manifest"
+  fi
   [ -n "$(ls -A "$ARTIFACTS_DIR" 2>/dev/null)" ] || die "没找到固件产物"
   cp -f "$SOURCE_DIR/.config" "$ARTIFACTS_DIR/build.config"
   grep '^CONFIG_PACKAGE_.*=y$' "$SOURCE_DIR/.config" | sort > "$ARTIFACTS_DIR/enabled-packages.txt"
