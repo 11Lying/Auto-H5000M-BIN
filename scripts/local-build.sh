@@ -445,6 +445,23 @@ symbol_kconfig_deps() {  # <CONFIG_SYMBOL>
     | tr '\n' ';' | sed 's/; */;/g' | cut -c1-500
 }
 
+# 配置失败的根因诊断（结果走 annotation，CI 里匿名可读，不必翻日志）
+diag_env() {
+  emit_ann "diag: pwd=$PWD"
+  emit_ann "diag: tmp/.config-package.in exists=$([ -f tmp/.config-package.in ] && echo yes || echo no) size=$(wc -c < tmp/.config-package.in 2>/dev/null || echo 0)"
+  emit_ann "diag: 'mtwifi' hits in .config-package.in = $(grep -c 'mtwifi' tmp/.config-package.in 2>/dev/null || echo 0)"
+  emit_ann "diag: 'mtwifi' hits in tmp/.packagedeps = $(grep -c 'mtwifi' tmp/.packagedeps 2>/dev/null || echo 0)"
+  emit_ann "diag: 'package/mtk' hits in tmp/.packagedeps = $(grep -c 'package/mtk' tmp/.packagedeps 2>/dev/null || echo 0)"
+  emit_ann "diag: feeds/luci/luci.mk=$([ -f feeds/luci/luci.mk ] && echo yes || echo no)"
+  emit_ann "diag: mtwifi-cfg-ucode Makefile dep line = $(grep -m1 'DEPENDS' package/mtk/applications/mtwifi-cfg-ucode/Makefile 2>/dev/null || echo NA)"
+  emit_ann "diag: luci-app-mtwifi-cfg dep line = $(grep -m1 'LUCI_DEPENDS' package/mtk/applications/luci-app-mtwifi-cfg/Makefile 2>/dev/null || echo NA)"
+  emit_ann "diag: turboacc block = $(awk '/^config PACKAGE_luci-app-turboacc-mtk$/{f=1} f{print} f&&/^$/{exit}' tmp/.config-package.in 2>/dev/null | tr '\n' ';' | cut -c1-300)"
+  emit_ann "diag: iwinfo-ucode pkg name = $(grep -m2 -E 'define Package/' package/network/utils/iwinfo-ucode/Makefile 2>/dev/null | tr '\n' ' ' || echo NA)"
+  emit_ann "diag: datconf pkg name = $(grep -m2 -E 'define Package/' package/mtk/applications/datconf/Makefile 2>/dev/null | tr '\n' ' ' || echo NA)"
+  emit_ann "diag: l1parser pkg name = $(grep -m2 -E 'define Package/' package/mtk/applications/l1parser/Makefile 2>/dev/null | tr '\n' ' ' || echo NA)"
+  emit_ann "diag: ucode-mod-datconf in .config = $(grep -c 'ucode-mod-datconf' .config 2>/dev/null || echo 0)"
+}
+
 verify_final_config() {
   cd "$ROOT_DIR/$SOURCE_DIR"
   local required=(
@@ -511,6 +528,7 @@ verify_final_config() {
       [ -n "$s" ] || continue
       emit_ann "PROBLEM $s"
     done
+    diag_env
     die "final .config verification failed: ${missing[*]:-} ${problems[*]:-}"
   fi
 }
