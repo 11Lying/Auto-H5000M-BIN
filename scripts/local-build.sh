@@ -132,6 +132,68 @@ stage_kit() {
   chmod 755 "$ROOT_DIR/$SOURCE_DIR/package/h5000m-kit/files/usr/share/sms_forwarder/"* 2>/dev/null || true
 }
 
+# ---------------------------------------------------------------- 内核配置
+#
+# 这些是 Linux 6.12 PHY Kconfig 符号，不属于 OpenWrt 顶层 .config。
+# 必须写入 target/linux/mediatek/filogic/config-6.12；只把
+# CONFIG_* 放进顶层 .config 对 kernel syncconfig 没有任何作用，仍会在
+# syncconfig 时出现 [NEW] 交互提示并在 CI 中失败。
+seed_kernel_config() {
+  local cfg="target/linux/mediatek/filogic/config-${KERNEL_PATCHVER}"
+  [ -f "$cfg" ] || die "找不到 Mediatek kernel config：$cfg"
+
+  # 取值按本次 25.12-dev-wifi7 的 Kconfig 提示和现有 H5000M
+  # filogic fragment 固定；不需要的通用 PHY 明确关闭，避免 NEW prompt。
+  local entries=(
+    'CONFIG_AIROHA_AN8801_PHY is not set'
+    'CONFIG_AIROHA_EN8801SC_PHY=y'
+    'CONFIG_AIR_AN8811HB_PHY is not set'
+    'CONFIG_AIR_AN8855_PHY=y'
+    'CONFIG_AIR_EN8811H_PHY=m'
+    'CONFIG_AMD_PHY is not set'
+    'CONFIG_ADIN_PHY is not set'
+    'CONFIG_ADIN1100_PHY is not set'
+    'CONFIG_AQUANTIA_PHY is not set'
+    'CONFIG_AX88796B_PHY is not set'
+    'CONFIG_BROADCOM_PHY is not set'
+    'CONFIG_BCM54140_PHY is not set'
+    'CONFIG_BCM7XXX_PHY is not set'
+    'CONFIG_BCM84881_PHY is not set'
+    'CONFIG_BCM87XX_PHY is not set'
+    'CONFIG_CICADA_PHY is not set'
+    'CONFIG_CORTINA_PHY is not set'
+    'CONFIG_DAVICOM_PHY is not set'
+    'CONFIG_ICPLUS_PHY=y'
+    'CONFIG_LXT_PHY is not set'
+    'CONFIG_INTEL_XWAY_PHY is not set'
+    'CONFIG_LSI_ET1011C_PHY is not set'
+    'CONFIG_MARVELL_PHY is not set'
+    'CONFIG_MARVELL_10G_PHY is not set'
+    'CONFIG_MARVELL_88Q2XXX_PHY is not set'
+    'CONFIG_MARVELL_88X2222_PHY is not set'
+    'CONFIG_MAXLINEAR_GPHY=y'
+    'CONFIG_MEDIATEK_GE_PHY=y'
+    'CONFIG_MEDIATEK_GE_SOC_PHY=y'
+    'CONFIG_MEDIATEK_2P5GE_PHY is not set'
+  )
+
+  local e sym
+  for e in "${entries[@]}"; do
+    sym="${e%%=*}"
+    sym="${sym%% *}"
+    # Remove an existing assignment for this exact symbol, then append one.
+    # This makes the operation idempotent across cached/reused source trees.
+    grep -v -E "^(# )?${sym}(=.*| is not set)$" "$cfg" > "${cfg}.tmp"
+    mv "${cfg}.tmp" "$cfg"
+    if [[ "$e" == *" is not set" ]]; then
+      printf '# %s\n' "$e" >> "$cfg"
+    else
+      printf '%s\n' "$e" >> "$cfg"
+    fi
+  done
+  log "  kernel PHY Kconfig 已写入 $cfg（非交互）"
+}
+
 # ---------------------------------------------------------------- 配置
 configure() {
   log "生成 .config"
@@ -173,6 +235,7 @@ main() {
   prepare_source
   prepare_feeds
   apply_patches
+  seed_kernel_config
   stage_kit
   configure
   if [ "$CONFIG_ONLY" = "true" ]; then log "--config-only：到此为止"; exit 0; fi
