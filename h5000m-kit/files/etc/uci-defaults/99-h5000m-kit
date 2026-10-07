@@ -21,7 +21,8 @@ OVL=/usr/share/h5000m-kit/overlay
 if [ -d "$OVL" ] ; then
 	log "injecting overlay files"
 	( cd "$OVL" && tar cf - . ) | ( cd / && tar xf - )
-	[ -f /usr/bin/sms_forwarder_next ] && chmod 755 /usr/bin/sms_forwarder_next
+	[ -f /bin/sendat ]      && chmod 755 /bin/sendat
+	[ -f /bin/sendat.real ] && chmod 755 /bin/sendat.real
 fi
 
 # ---------------------------------------------------------------- 权限

@@ -306,6 +306,10 @@ Quectel RM502Q-AE）的全部自研改造固化进固件，刷机后不再需要
 - IPv6 快失败（`v6fastfail` + 每周刷新）、OpenClash 动态运营商 DNS 注入
 - `etc/uci-defaults/99-h5000m-kit` 首次启动自动写好 uci、启用服务、装 cron
 
+说明：ModemWebUI 在固件里只保留**面板本体**（`/www/webui/webui000/` +
+`/usr/bin/webuiserver` + `/etc/init.d/modemwebui`，直连 `:8001` 使用）。
+LuCI 里那个 `/admin/modem/modemwebui` 入口只是个 iframe 壳（3KB），本机不用，已不打包。
+
 配套：
 - `patches/999-h5000m-pwm-fan-boot-duty.kernel-patch` —— pwm-fan probe 原本一加载就
   写满 PWM；补丁改为读 DTS `pwm-fan,boot-duty`（配合 `patches/dts-h5000m-fan-boot-duty.patch`
