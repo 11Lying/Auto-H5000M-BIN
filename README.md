@@ -289,3 +289,33 @@ MTK HNAT / 网络加速：MT798x 默认启用 `kmod-mediatek_hnat`（硬件 NAT 
 ## 许可证
 
 继承上游 ImmortalWrt 项目许可证。
+
+---
+
+## h5000m-kit：把全部定制烤进固件
+
+`h5000m-kit/` 是仓库根下的一个 OpenWrt 包，由 `scripts/local-build.sh` 的
+`stage_h5000m_kit` 拷进源码树 `package/h5000m-kit`。它把本机（Hiveton H5000M +
+Quectel RM502Q-AE）的全部自研改造固化进固件，刷机后不再需要手工重建：
+
+- AT 双口物理隔离（`/bin/sendat` wrapper + `/usr/bin/rm502q-at-map` + usb hotplug + init）
+- 短信转发（企微群机器人 + 时区修正的 `sms_forwarder_next`）
+- ModemWebUI 面板整套（含 QSCAN 主动扫描、邻区 v8 前端补丁、`?v=N` 缓存戳）
+- 风扇控制（`/usr/bin/fancontrol` CPU+WiFi 取高 / `fanearly`）
+- QMI 断线自愈（`qmi-recovery`）、WebUI 看门狗（`webui-ws-guard`）
+- IPv6 快失败（`v6fastfail` + 每周刷新）、OpenClash 动态运营商 DNS 注入
+- `etc/uci-defaults/99-h5000m-kit` 首次启动自动写好 uci、启用服务、装 cron
+
+配套：
+- `patches/999-h5000m-pwm-fan-boot-duty.kernel-patch` —— pwm-fan probe 原本一加载就
+  写满 PWM；补丁改为读 DTS `pwm-fan,boot-duty`（配合 `patches/dts-h5000m-fan-boot-duty.patch`
+  板级取值 51 = 20%），开机不再满转。
+- `ipk/` —— 厂商私有 feed 的 5 个面板包存档（内容已并进 h5000m-kit，编译不使用）。
+
+### 与 fork 默认行为的**有意**差异
+
+| 项 | 差异 | 原因 |
+|---|---|---|
+| `luci-app-Airpifanctrl` | **关闭**（`local-build.sh` 与 workflow 的断言已相应改为校验 `h5000m-kit`） | 它自带 `/etc/init.d/Airpifanctrl` + `/usr/bin/fancts.sh`，会与 h5000m-kit 的 `/usr/bin/fancontrol` **争抢 pwm1**，两个控制器互相打架 |
+| `modemmanager` | 保持 fork 默认（启用） | 本机不使用它拨号，但 `local-build.sh` 有硬校验；关闭需同时改脚本与 workflow，暂不做 |
+| 精简清单 | 去掉 Nikki/MosDNS/PassWall/HomeProxy/adblock/UPnP/VLMCSD/DockerMan/argon/ramfree/watchcat/ip6tables 全家等 | 本机不用；OpenClash 走 nft，不需要 iptables 后端 |

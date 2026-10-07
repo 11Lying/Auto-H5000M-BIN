@@ -195,7 +195,7 @@ jobs:
             'CONFIG_PACKAGE_kmod-mtk_wed=y'
             'CONFIG_PACKAGE_kmod-mediatek_hnat=y'
             'CONFIG_PACKAGE_kmod-hwmon-pwmfan=y'
-            'CONFIG_PACKAGE_luci-app-Airpifanctrl=y'
+            'CONFIG_PACKAGE_h5000m-kit=y'
             'CONFIG_PACKAGE_luci-app-qmodem-next=y'
             'CONFIG_PACKAGE_luci-app-openclash=y'
             'CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y'
@@ -213,6 +213,7 @@ jobs:
             'luci-app-dockerman'
             'luci-app-homeproxy'
             'luci-app-qmodem'
+            'luci-app-Airpifanctrl'
             'luci-app-modem'
           )
           for symbol in "${required[@]}"; do
@@ -224,7 +225,7 @@ jobs:
               exit 1
             fi
           done
-          grep -E '^(CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton-h5000m|CONFIG_MTK_HWIFI_(MT7992|MT799A|WED_SUPPORT)|CONFIG_PACKAGE_(kmod-mt_hwifi|kmod-mtk_wed|kmod-mediatek_hnat|kmod-hwmon-pwmfan|luci-app-Airpifanctrl|luci-app-qmodem-next|luci-app-openclash|kmod-usb-net-qmi-wwan|kmod-usb-serial-option|kmod-pcie_mhi))=' "$config"
+          grep -E '^(CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton-h5000m|CONFIG_MTK_HWIFI_(MT7992|MT799A|WED_SUPPORT)|CONFIG_PACKAGE_(kmod-mt_hwifi|kmod-mtk_wed|kmod-mediatek_hnat|kmod-hwmon-pwmfan|h5000m-kit|luci-app-qmodem-next|luci-app-openclash|kmod-usb-net-qmi-wwan|kmod-usb-serial-option|kmod-pcie_mhi))=' "$config"
 
       - name: 上传最终配置
         uses: actions/upload-artifact@v4
@@ -554,12 +555,12 @@ jobs:
             'CONFIG_PACKAGE_kmod-mtk_wed=y' \
             'CONFIG_PACKAGE_kmod-mediatek_hnat=y' \
             'CONFIG_PACKAGE_kmod-hwmon-pwmfan=y' \
-            'CONFIG_PACKAGE_luci-app-Airpifanctrl=y' \
+            'CONFIG_PACKAGE_h5000m-kit=y' \
             'CONFIG_PACKAGE_luci-app-qmodem-next=y' \
             'CONFIG_PACKAGE_luci-app-openclash=y'; do
             grep -qx "$symbol" "$config" || { echo "❌ 缺少最终配置: $symbol"; exit 1; }
           done
-          for package in kmod-mtk_wed kmod-mediatek_hnat kmod-hwmon-pwmfan luci-app-Airpifanctrl luci-app-qmodem-next luci-app-openclash; do
+          for package in kmod-mtk_wed kmod-mediatek_hnat kmod-hwmon-pwmfan h5000m-kit luci-app-qmodem-next luci-app-openclash; do
             grep -q "^${package}[[:space:]-]" "$manifest" || { echo "❌ 镜像清单缺少: $package"; exit 1; }
           done
           [ -s artifacts/sha256sums.txt ] || { echo "❌ 未找到固件 SHA256"; exit 1; }

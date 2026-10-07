@@ -2315,7 +2315,10 @@ EOF
   # missing and these checks will fail loudly instead of silently dropping
   # the .config symbol.
   verify_enabled_pkg "turboacc-mtk LuCI" "luci-app-turboacc-mtk" true
-  verify_enabled_pkg "Airpifanctrl LuCI" "luci-app-Airpifanctrl" true
+  # Airpifanctrl 被有意关闭：它的 /etc/init.d/Airpifanctrl + /usr/bin/fancts.sh
+  # 会和 h5000m-kit 提供的 /usr/bin/fancontrol（CPU+WiFi 取高）争抢 pwm1，
+  # 导致两个控制器互相打架。改校验我们自己的包必须存在。
+  verify_enabled_pkg "h5000m-kit (fan/AT/sms/QSCAN/panel)" "h5000m-kit" true
   verify_enabled_pkg "kmod-mediatek_hnat" "kmod-mediatek_hnat" true
   verify_config_symbol "H5000M USE_RFKILL dependency" "CONFIG_USE_RFKILL=y"
   verify_enabled_pkg "H5000M blkid dependency" "blkid" true
