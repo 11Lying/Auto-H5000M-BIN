@@ -224,6 +224,8 @@ run_libffi_only() {
 			\( -name libdeflate-gzip -o -name .built -o -name .installed \) -print && \
 		test -x staging_dir/host/bin/libdeflate-gzip && \
 		ls -l staging_dir/host/bin/libdeflate-gzip && \
+		make tools/sed/compile V=s && \
+		test -x staging_dir/host/bin/sed && \
 		make package/utils/lua/host/compile V=s && \
 		log "Lua host compile passed; now clean only libffi and compile it" && \
 		make package/feeds/packages/libffi/clean V=s && \
