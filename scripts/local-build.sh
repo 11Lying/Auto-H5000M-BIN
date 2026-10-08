@@ -213,10 +213,20 @@ run_build() {
 }
 
 run_libffi_only() {
-	log "libffi gate: clean only libffi, then compile it serially with V=s"
-	# Clean this package alone as requested; do not remove shared download,
-	# toolchain, staging, ccache, or other package build products.
-	( cd "$SOURCE_DIR" && make package/feeds/packages/libffi/clean V=s && \
+	log "host-tool gate: build libdeflate, verify libdeflate-gzip, then compile Lua host"
+	# A direct package/<name>/compile target does not traverse the top-level
+	# tools phase. libdeflate is already a default tools-core tool in the pinned
+	# upstream tree; build it explicitly here rather than fabricating its output.
+	( cd "$SOURCE_DIR" && \
+		make tools/libdeflate/compile V=s && \
+		printf '%s\n' '--- libdeflate host build outputs ---' && \
+		find build_dir/host -maxdepth 4 \
+			\( -name libdeflate-gzip -o -name .built -o -name .installed \) -print && \
+		test -x staging_dir/host/bin/libdeflate-gzip && \
+		ls -l staging_dir/host/bin/libdeflate-gzip && \
+		make package/utils/lua/host/compile V=s && \
+		log "Lua host compile passed; now clean only libffi and compile it" && \
+		make package/feeds/packages/libffi/clean V=s && \
 		make -j1 package/feeds/packages/libffi/compile V=s ) \
 		2>&1 | tee "$ROOT_DIR/build.log"
 }
