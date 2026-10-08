@@ -180,9 +180,10 @@ make_config() {
 # 5. build
 # ---------------------------------------------------------------------------
 run_build() {
-	log "building with $THREADS threads"
-	( cd "$SOURCE_DIR" && make -j"$THREADS" ) \
-		|| ( cd "$SOURCE_DIR" && make -j"$THREADS" V=s )
+	log "building verbosely with $THREADS threads; preserving first-run log"
+	# Do not retry a failed build: the first failure is the diagnostic evidence.
+	# V=s exposes the actual failing command, and tee preserves it for upload.
+	( cd "$SOURCE_DIR" && make -j"$THREADS" V=s ) 2>&1 | tee "$ROOT_DIR/build.log"
 }
 
 # ---------------------------------------------------------------------------
