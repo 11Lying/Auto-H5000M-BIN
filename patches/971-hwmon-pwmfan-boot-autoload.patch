@@ -1,0 +1,15 @@
+--- a/package/kernel/linux/modules/hwmon.mk
++++ b/package/kernel/linux/modules/hwmon.mk
+@@ -532,7 +532,11 @@
+   TITLE:=Generic PWM FAN support
+   KCONFIG:=CONFIG_SENSORS_PWM_FAN
+   FILES:=$(LINUX_DIR)/drivers/hwmon/pwm-fan.ko
+-  AUTOLOAD:=$(call AutoLoad,60,pwm-fan)
++  # Hand the fan to the OS in the early kernel-module pass. On a PWM fan
++  # with no signal the fan runs at full speed, so probing it as late as
++  # the general module batch leaves it unregulated for longer.
++  # Scoped to Mediatek targets to leave other targets untouched.
++  AUTOLOAD:=$(call AutoLoad,60,pwm-fan,$(if $(CONFIG_TARGET_mediatek),1,))
+   $(call AddDepends/hwmon,@PWM_SUPPORT +PACKAGE_kmod-thermal:kmod-thermal)
+ endef
+ 

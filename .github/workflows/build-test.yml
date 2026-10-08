@@ -1,576 +1,165 @@
-name: Build ImmortalWrt H5000M
+name: H5000M ImmortalWrt 25.12.2 official baseline
 
 on:
   push:
-    branches:
-      - main
-  schedule:
-    - cron: '0 16 * * 0'  # 每周一北京时间 00:00
+    branches: [main]
   workflow_dispatch:
     inputs:
-      runner_type:
-        description: '运行器类型（github-hosted 默认；free 账户被锁时选 self-hosted 跑自己的机器）'
-        required: false
-        default: github-hosted
-        type: choice
-        options:
-          - github-hosted
-          - self-hosted
-      self_hosted_labels:
-        description: '自托管 runner 标签（逗号分隔；仅 runner_type=self-hosted 时生效，默认 linux,x64,h5000m）'
-        required: false
-        default: 'linux,x64,h5000m'
-        type: string
-      enable_adguardhome:
-        description: '启用 AdGuardHome'
-        required: false
-        default: false
-        type: boolean
-      enable_openclash:
-        description: '启用 OpenClash'
-        required: false
-        default: true
-        type: boolean
-      enable_nikki:
-        description: '启用 Nikki'
-        required: false
-        default: false
-        type: boolean
-      enable_upnp:
-        description: '启用 UPnP'
-        required: false
-        default: false
-        type: boolean
-      enable_vlmcsd:
-        description: '启用 VLMCSd'
-        required: false
-        default: false
-        type: boolean
-      enable_mosdns:
-        description: '启用 MosDNS'
-        required: false
-        default: false
-        type: boolean
-      enable_dockerman:
-        description: '启用 DockerMan'
-        required: false
-        default: false
-        type: boolean
-      enable_homeproxy:
-        description: '启用 HomeProxy'
-        required: false
-        default: false
-        type: boolean
-      enable_original_modem:
-        description: '启用原版 Modem（luci-app-modem + ModemManager，支持 Quectel RG501Q-EU/RM5xxQ 等 QMI 5G 模块）。与 QModem 互斥——启用 QModem 时会被自动禁用。'
-        required: false
-        default: false
-        type: boolean
-      enable_qmodem:
-        description: '启用 QModem (FUjr/QModem，Quectel/Fibocom/MEIG/SIMCOM 5G modem LuCI 面板，原版 luci-app-modem 不覆盖 RG501Q-EU 等专用 5G 驱动时启用。与原版 modem 互斥。'
-        required: false
-        default: true
-        type: boolean
-      enable_qmodem_next:
-        description: 'QModem 新版 JS LuCI (luci-app-qmodem-next)。默认启用；与 lua 版互斥。'
-        required: false
-        default: true
-        type: boolean
-      enable_qmodem_lua:
-        description: 'QModem 经典 Lua LuCI (luci-app-qmodem)。与 qmodem-next 互斥。'
-        required: false
-        default: false
-        type: boolean
-      enable_adblock:
-        description: '启用 Adblock（DNS 层广告/恶意域名过滤，依赖 dnsmasq/unbound/smartdns）'
-        required: false
-        default: false
-        type: boolean
-      publish_release:
-        description: '保留项：产物仅作为 Actions artifact 上传'
-        required: false
-        default: false
-        type: boolean
       confirm_firmware_build:
-        description: 'Actually build H5000M firmware'
+        description: Build the firmware (otherwise run validation only)
         required: true
         default: false
         type: boolean
-      run_config_coverage:
-        description: '先运行覆盖性配置测试'
+      threads:
+        description: Build parallelism
         required: false
-        default: false
-        type: boolean
-      coverage_profile_set:
-        description: '覆盖性配置测试范围'
-        required: false
-        default: quick
-        type: choice
-        options:
-          - quick
-          - full
-      full_build_smoke_profile:
-        description: '额外完整编译冒烟 profile（留空则不跑）'
-        required: false
-        default: ''
+        default: '2'
         type: string
-      run_rootfs_preflight:
-        description: '仅构建 IPK 并执行 rootfs 安装与所有权预检（不生成固件）'
-        required: false
-        default: false
-        type: boolean
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: h5000m-25.12.2-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
-  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
-  REPO_BRANCH: mt798x-mt799x-6.6-mtwifi
-  CONFIG_URL: https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/refs/heads/mt798x-mt799x-6.6-mtwifi/defconfig/mt7987_mt7992.config
-  SOURCE_DIR: immortalwrt
+  SOURCE_COMMIT: 4fc16f2985a358bd43bb522e43f05395fcbd6ed5
+  SOURCE_REF: v25.12.2
+  TARGET: mediatek/filogic
+  DEVICE: hiveton_h5000m
   TZ: Asia/Shanghai
-  GOPROXY: https://goproxy.cn,https://proxy.golang.org,direct
-  GOSUMDB: sum.golang.google.cn
-  DOWNLOAD_MIRROR: "https://mirrors.tuna.tsinghua.edu.cn/openwrt/sources;https://mirrors.ustc.edu.cn/openwrt/sources;https://mirrors.bfsu.edu.cn/openwrt/sources"
-  GITHUB_PROXY_PREFIXES: "https://ghfast.top/ https://gh-proxy.com/ https://gh.llkk.cc/"
 
 jobs:
-  config-validation:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+  validate:
+    name: Static upstream/config audit
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
-      - name: 检出代码
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
-      - name: 安装配置验证依赖
-        shell: bash
+      - name: Install validation dependencies
         run: |
-          set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            build-essential git ccache python3 perl libncurses5-dev libssl-dev libgmp3-dev \
-            libmbedtls-dev zlib1g-dev autoconf automake libtool patch make gcc g++ gawk \
-            gettext unzip file wget curl rsync zstd golang-go rustc cargo
+          sudo apt-get install -y --no-install-recommends git patch bash coreutils
 
-      - name: 运行 H5000M 配置验证
-        shell: bash
-        env:
-          ENABLE_ADGUARDHOME: false
-          ENABLE_OPENCLASH: true
-          ENABLE_NIKKI: false
-          ENABLE_UPNP: false
-          ENABLE_VLMCSD: false
-          ENABLE_MOSDNS: false
-          ENABLE_DOCKERMAN: false
-          ENABLE_HOMEPROXY: false
-          ENABLE_ORIGINAL_MODEM: false
-          ENABLE_ADBLOCK: false
-          ENABLE_QMODEM: true
-          ENABLE_QMODEM_NEXT: true
-          ENABLE_QMODEM_LUA: false
-          THREADS: 2
+      - name: Shell syntax and repository hygiene
         run: |
-          set -euo pipefail
+          set -euxo pipefail
+          bash -n scripts/local-build.sh scripts/verify-config.sh
+          test "$(find patches -maxdepth 1 -type f | wc -l)" -eq 3
+          ! find . -path './.git' -prune -o -type f -print | grep -E 'h5000m-kit|mtwifi|Airpifanctrl|turboacc|chasey|padavanonly|openwrt-24\.10' || true
+          grep -q 'immortalwrt/immortalwrt' README.md
+          grep -q '4fc16f2985a358bd43bb522e43f05395fcbd6ed5' README.md
+
+      - name: Upstream source/config preflight
+        env:
+          THREADS: '2'
+        run: |
+          set -euxo pipefail
+          # This performs a fresh official clone, pinned-feed setup, patch
+          # application, make defconfig and all static audits. No old source
+          # tree or target/object cache is available in this job.
           bash scripts/local-build.sh --config-only
 
-      - name: 验证最终配置
-        shell: bash
-        run: |
-          set -euo pipefail
-          config="immortalwrt/.config"
-          [ -f "$config" ] || { echo "❌ 未生成最终 .config"; exit 1; }
-          required=(
-            'CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton-h5000m=y'
-            'CONFIG_MTK_HWIFI_MT7992=y'
-            'CONFIG_MTK_HWIFI_MT799A=y'
-            'CONFIG_MTK_HWIFI_WED_SUPPORT=y'
-            'CONFIG_PACKAGE_kmod-mt_hwifi=y'
-            'CONFIG_PACKAGE_kmod-mtk_wed=y'
-            'CONFIG_PACKAGE_kmod-mediatek_hnat=y'
-            'CONFIG_PACKAGE_kmod-hwmon-pwmfan=y'
-            'CONFIG_PACKAGE_h5000m-kit=y'
-            'CONFIG_PACKAGE_luci-app-qmodem-next=y'
-            'CONFIG_PACKAGE_luci-app-openclash=y'
-            'CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y'
-            'CONFIG_PACKAGE_kmod-usb-serial-option=y'
-            'CONFIG_PACKAGE_kmod-pcie_mhi=y'
-          )
-          disabled=(
-            'luci-app-nikki'
-            'luci-app-mosdns'
-            'luci-app-upnp'
-            'adblock'
-            'luci-app-adblock'
-            'luci-app-vlmcsd'
-            'luci-app-adguardhome'
-            'luci-app-dockerman'
-            'luci-app-homeproxy'
-            'luci-app-qmodem'
-            'luci-app-Airpifanctrl'
-            'luci-app-modem'
-          )
-          for symbol in "${required[@]}"; do
-            grep -qx "$symbol" "$config" || { echo "❌ 缺少最终配置: $symbol"; exit 1; }
-          done
-          for package in "${disabled[@]}"; do
-            if grep -qx "CONFIG_PACKAGE_${package}=y" "$config"; then
-              echo "❌ 非目标组件仍被启用: $package"
-              exit 1
-            fi
-          done
-          grep -E '^(CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton-h5000m|CONFIG_MTK_HWIFI_(MT7992|MT799A|WED_SUPPORT)|CONFIG_PACKAGE_(kmod-mt_hwifi|kmod-mtk_wed|kmod-mediatek_hnat|kmod-hwmon-pwmfan|h5000m-kit|luci-app-qmodem-next|luci-app-openclash|kmod-usb-net-qmi-wwan|kmod-usb-serial-option|kmod-pcie_mhi))=' "$config"
-
-      - name: 上传最终配置
-        uses: actions/upload-artifact@v4
-        with:
-          name: H5000M-config-validation
-          path: immortalwrt/.config
-          retention-days: 7
-
-  rootfs-preflight:
-    if: github.event_name == 'workflow_dispatch' && inputs.run_rootfs_preflight == true
-    runs-on: ${{ fromJSON(format('["{0}"]', github.event.inputs.runner_type == 'self-hosted' && github.event.inputs.self_hosted_labels || 'ubuntu-24.04')) }}
-    timeout-minutes: 600
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: 释放磁盘空间（仅 github-hosted 跑）
-        if: github.event.inputs.runner_type != 'self-hosted'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /etc/mysql /etc/php \
-            /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache /usr/local/.ghcup \
-            /usr/local/graalvm /imagegeneration /usr/local/share \
-            /var/cache/apt/archives/* 2>/dev/null || true
-          sudo apt-get -y purge azure-cli* ghc* zulu* hhvm* llvm* firefox* \
-            google* dotnet* aspnetcore* powershell* openjdk* adoptopenjdk* mysql* php* \
-            mongodb* snap* 2>/dev/null || true
-          sudo apt-get -y autoremove --purge
-          sudo apt-get -y clean
-          df -h /
-
-      - name: 安装编译依赖（仅 github-hosted 跑；自托管需预装依赖）
-        if: github.event.inputs.runner_type != 'self-hosted'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            build-essential ack antlr3 asciidoc autoconf automake autopoint binutils bison \
-            bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk \
-            gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool perl \
-            lib32gcc-s1 libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev \
-            libltdl-dev libmbedtls-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev \
-            libpython3-dev libreadline-dev libssl-dev libtool lld llvm lrzsz mkisofs msmtp \
-            nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply \
-            python3-pyelftools python3-setuptools qemu-utils re2c rsync scons squashfs-tools \
-            subversion swig texinfo uglifyjs unzip upx-ucl vim wget xmlto xxd zlib1g-dev \
-            rustc cargo golang-go zstd file
-
-      - name: 设置 ccache（编译加速）
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: immortalwrt-h5000m-preflight-${{ env.REPO_BRANCH }}
-          max-size: 8G
-          save: true
-
-      - name: 恢复构建缓存
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.SOURCE_DIR }}/dl
-            ${{ env.SOURCE_DIR }}/staging_dir/host
-            ${{ env.SOURCE_DIR }}/build_dir/host
-          key: ${{ runner.os }}-preflight-${{ env.REPO_BRANCH }}-${{ hashFiles('feeds.conf.default', 'h5000m.extra.config', 'patches/**', 'scripts/local-build.sh') }}
-          restore-keys: |
-            ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-
-            ${{ runner.os }}-preflight-${{ env.REPO_BRANCH }}-
-
-      - name: 构建 IPK 并执行 rootfs 预检
-        shell: bash
-        env:
-          ENABLE_ADGUARDHOME: false
-          ENABLE_OPENCLASH: true
-          ENABLE_NIKKI: false
-          ENABLE_UPNP: false
-          ENABLE_VLMCSD: false
-          ENABLE_MOSDNS: false
-          ENABLE_DOCKERMAN: false
-          ENABLE_HOMEPROXY: false
-          ENABLE_ORIGINAL_MODEM: false
-          ENABLE_ADBLOCK: false
-          ENABLE_QMODEM: true
-          ENABLE_QMODEM_NEXT: true
-          ENABLE_QMODEM_LUA: false
-        run: |
-          set -euo pipefail
-          export PATH="/usr/lib/ccache:$PATH"
-          export THREADS="$(nproc)"
-          bash scripts/rootfs-preflight.sh
-
-      - name: 上传 rootfs 预检报告
+      - name: Upload validation evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: H5000M-rootfs-preflight
-          path: rootfs-preflight/
+          name: H5000M-25.12.2-validation-${{ github.sha }}
+          path: |
+            immortalwrt/.config
+            immortalwrt/feeds.conf.default
+          if-no-files-found: ignore
           retention-days: 14
 
-  # ─── 覆盖性配置测试（与固件编译并行，不阻塞最终 Release）─────────────────
-  config-coverage:
-    # runs-on 不允许引用顶层 env，直接在这里内联 fromJSON 表达式
-    runs-on: ${{ fromJSON(format('["{0}"]', github.event.inputs.runner_type == 'self-hosted' && github.event.inputs.self_hosted_labels || 'ubuntu-24.04')) }}
-    timeout-minutes: 60
-    if: github.event.inputs.run_config_coverage == true
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: 解析功能开关
-        id: features
-        shell: bash
-        run: |
-          set -euo pipefail
-          declare -A scheduled_defaults=(
-            [enable_adguardhome]=false [enable_openclash]=true [enable_nikki]=false
-            [enable_upnp]=false [enable_vlmcsd]=false [enable_mosdns]=false [enable_dockerman]=false
-            [enable_homeproxy]=false [enable_original_modem]=false [enable_adblock]=false
-            [enable_qmodem]=true [enable_qmodem_next]=true [enable_qmodem_lua]=false
-            [publish_release]=false [run_config_coverage]=false [coverage_profile_set]=quick
-            [full_build_smoke_profile]=''
-          )
-          declare -A manual=(
-            [enable_adguardhome]='${{ github.event.inputs.enable_adguardhome }}'
-            [enable_openclash]='${{ github.event.inputs.enable_openclash }}'
-            [enable_nikki]='${{ github.event.inputs.enable_nikki }}'
-            [enable_upnp]='${{ github.event.inputs.enable_upnp }}'
-            [enable_vlmcsd]='${{ github.event.inputs.enable_vlmcsd }}'
-            [enable_mosdns]='${{ github.event.inputs.enable_mosdns }}'
-            [enable_dockerman]='${{ github.event.inputs.enable_dockerman }}'
-            [enable_homeproxy]='${{ github.event.inputs.enable_homeproxy }}'
-            [enable_original_modem]='${{ github.event.inputs.enable_original_modem }}'
-            [enable_adblock]='${{ github.event.inputs.enable_adblock }}'
-            [enable_qmodem]='${{ github.event.inputs.enable_qmodem }}'
-            [enable_qmodem_next]='${{ github.event.inputs.enable_qmodem_next }}'
-            [enable_qmodem_lua]='${{ github.event.inputs.enable_qmodem_lua }}'
-            [publish_release]='${{ github.event.inputs.publish_release }}'
-            [run_config_coverage]='${{ github.event.inputs.run_config_coverage }}'
-            [coverage_profile_set]='${{ github.event.inputs.coverage_profile_set }}'
-            [full_build_smoke_profile]='${{ github.event.inputs.full_build_smoke_profile }}'
-          )
-          for k in "${!scheduled_defaults[@]}"; do
-            v="${scheduled_defaults[$k]}"
-            if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${manual[$k]:-}" ]; then
-              v="${manual[$k]}"
-            fi
-            echo "$k=$v" >> "$GITHUB_OUTPUT"
-          done
-
-      - name: 安装编译依赖（仅 github-hosted 跑；自托管需预装依赖）
-        if: github.event.inputs.runner_type != 'self-hosted'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            build-essential git ccache python3 perl libncurses5-dev libssl-dev libgmp3-dev \
-            libmbedtls-dev zlib1g-dev autoconf automake libtool patch make gcc g++ gawk \
-            gettext unzip file wget curl rsync zstd golang-go rustc cargo 2>&1 | tail -3
-
-      - name: 恢复构建缓存（加速重复检查）
-        uses: actions/cache@v4
-        with:
-          path: |
-            immortalwrt-coverage/dl
-            immortalwrt-coverage/staging_dir/host
-            immortalwrt-coverage/build_dir/host
-          key: ${{ runner.os }}-coverage-${{ env.REPO_BRANCH }}-${{ hashFiles('feeds.conf.default', 'h5000m.extra.config', 'patches/**', 'scripts/local-build.sh') }}
-          restore-keys: |
-            ${{ runner.os }}-coverage-${{ env.REPO_BRANCH }}-
-
-      - name: 覆盖性配置测试
-        env:
-          PROFILE_SET: ${{ steps.features.outputs.coverage_profile_set || 'quick' }}
-          FULL_BUILD_PROFILE: ${{ steps.features.outputs.full_build_smoke_profile || '' }}
-        run: |
-          set -euo pipefail
-          export PATH="/usr/lib/ccache:$PATH"
-          export THREADS="$(nproc)"
-          bash scripts/coverage-test.sh "$PROFILE_SET"
-
-  # ─── 固件编译（仅手动触发）──────────────────────────────────────
   build:
+    name: Build official H5000M firmware
     if: github.event_name == 'workflow_dispatch' && inputs.confirm_firmware_build == true
-    # runs-on 不允许引用顶层 env，直接在这里内联 fromJSON 表达式
-    runs-on: ${{ fromJSON(format('["{0}"]', github.event.inputs.runner_type == 'self-hosted' && github.event.inputs.self_hosted_labels || 'ubuntu-24.04')) }}
+    needs: validate
+    runs-on: ubuntu-24.04
     timeout-minutes: 600
     steps:
-      - name: 检出代码
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
-      - name: 解析功能开关
-        id: features
-        shell: bash
+      - name: Free runner disk space
         run: |
-          set -euo pipefail
-          declare -A defaults=(
-            [enable_adguardhome]=false [enable_openclash]=true [enable_nikki]=false
-            [enable_upnp]=false [enable_vlmcsd]=false [enable_mosdns]=false [enable_dockerman]=false
-            [enable_homeproxy]=false [enable_original_modem]=false [enable_adblock]=false
-            [enable_qmodem]=true [enable_qmodem_next]=true [enable_qmodem_lua]=false
-            [publish_release]=false
-          )
-          declare -A inputs=(
-            [enable_adguardhome]='${{ github.event.inputs.enable_adguardhome }}'
-            [enable_openclash]='${{ github.event.inputs.enable_openclash }}'
-            [enable_nikki]='${{ github.event.inputs.enable_nikki }}'
-            [enable_upnp]='${{ github.event.inputs.enable_upnp }}'
-            [enable_vlmcsd]='${{ github.event.inputs.enable_vlmcsd }}'
-            [enable_mosdns]='${{ github.event.inputs.enable_mosdns }}'
-            [enable_dockerman]='${{ github.event.inputs.enable_dockerman }}'
-            [enable_homeproxy]='${{ github.event.inputs.enable_homeproxy }}'
-            [enable_original_modem]='${{ github.event.inputs.enable_original_modem }}'
-            [enable_adblock]='${{ github.event.inputs.enable_adblock }}'
-            [enable_qmodem]='${{ github.event.inputs.enable_qmodem }}'
-            [enable_qmodem_next]='${{ github.event.inputs.enable_qmodem_next }}'
-            [enable_qmodem_lua]='${{ github.event.inputs.enable_qmodem_lua }}'
-            [publish_release]='${{ github.event.inputs.publish_release }}'
-          )
-          for k in "${!defaults[@]}"; do
-            v="${defaults[$k]}"
-            if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${inputs[$k]:-}" ]; then
-              v="${inputs[$k]}"
-            fi
-            echo "$k=$v" >> "$GITHUB_OUTPUT"
-          done
-
-      - name: 释放磁盘空间（仅 github-hosted 跑）
-        if: github.event.inputs.runner_type != 'self-hosted'
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "🧹 释放磁盘空间..."
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /etc/mysql /etc/php \
-            /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache /usr/local/.ghcup \
-            /usr/local/graalvm /imagegeneration /usr/local/share \
-            /var/cache/apt/archives/* 2>/dev/null || true
-          sudo apt-get -y purge azure-cli* ghc* zulu* hhvm* llvm* firefox* \
-            google* dotnet* aspnetcore* powershell* openjdk* adoptopenjdk* mysql* php* \
-            mongodb* snap* 2>/dev/null || true
-          sudo apt-get -y autoremove --purge
-          sudo apt-get -y clean
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache \
+            /usr/local/share/boost /usr/share/swift /usr/local/.ghcup || true
+          sudo apt-get clean
           df -h /
 
-      - name: 安装编译依赖（仅 github-hosted 跑；自托管需预装依赖）
-        if: github.event.inputs.runner_type != 'self-hosted'
-        shell: bash
+      - name: Install build dependencies
         run: |
-          set -euo pipefail
-          sudo timedatectl set-timezone "$TZ" || true
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            build-essential ack antlr3 asciidoc autoconf automake autopoint binutils bison \
-            bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk \
-            gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool perl \
-            lib32gcc-s1 libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev \
-            libltdl-dev libmbedtls-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev \
-            libpython3-dev libreadline-dev libssl-dev libtool lld llvm lrzsz mkisofs msmtp \
-            nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply \
-            python3-pyelftools python3-setuptools qemu-utils re2c rsync scons squashfs-tools \
-            subversion swig texinfo uglifyjs unzip upx-ucl vim wget xmlto xxd zlib1g-dev \
-            rustc cargo golang-go zstd file 2>&1 | tail -3
+            build-essential clang ccache git gawk gettext patch rsync unzip wget curl \
+            file python3 python3-pyelftools libncurses5-dev libncursesw5-dev \
+            libssl-dev zlib1g-dev libelf-dev libtool autoconf automake bison flex \
+            device-tree-compiler gcc-multilib g++-multilib lib32gcc-s1 libc6-dev-i386 \
+            squashfs-tools zstd xz-utils time
 
-      - name: 设置 ccache（编译加速）
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: immortalwrt-h5000m-${{ env.REPO_BRANCH }}
-          max-size: 8G
-          save: true
-
-      - name: 恢复构建缓存
+      - name: Restore download cache
         uses: actions/cache@v4
         with:
-          path: |
-            ${{ env.SOURCE_DIR }}/dl
-            ${{ env.SOURCE_DIR }}/staging_dir/host
-            ${{ env.SOURCE_DIR }}/build_dir/host
-          key: ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-${{ hashFiles('feeds.conf.default', 'h5000m.extra.config', 'patches/**', 'scripts/local-build.sh') }}
+          path: immortalwrt/dl
+          key: ${{ runner.os }}-dl-${{ env.SOURCE_COMMIT }}-${{ hashFiles('feeds.conf.default', 'config/**', 'patches/**', 'scripts/**') }}
           restore-keys: |
-            ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-
+            ${{ runner.os }}-dl-${{ env.SOURCE_COMMIT }}-
 
-      - name: 编译固件
-        shell: bash
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-${{ env.DEVICE }}-${{ hashFiles('config/**', 'patches/**', 'feeds.conf.default') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-${{ env.DEVICE }}-
+
+      - name: Build firmware
         env:
-          ENABLE_ADGUARDHOME: ${{ steps.features.outputs.enable_adguardhome }}
-          ENABLE_OPENCLASH: ${{ steps.features.outputs.enable_openclash }}
-          ENABLE_NIKKI: ${{ steps.features.outputs.enable_nikki }}
-          ENABLE_UPNP: ${{ steps.features.outputs.enable_upnp }}
-          ENABLE_VLMCSD: ${{ steps.features.outputs.enable_vlmcsd }}
-          ENABLE_MOSDNS: ${{ steps.features.outputs.enable_mosdns }}
-          ENABLE_DOCKERMAN: ${{ steps.features.outputs.enable_dockerman }}
-          ENABLE_HOMEPROXY: ${{ steps.features.outputs.enable_homeproxy }}
-          ENABLE_ORIGINAL_MODEM: ${{ steps.features.outputs.enable_original_modem }}
-          ENABLE_ADBLOCK: ${{ steps.features.outputs.enable_adblock }}
-          ENABLE_QMODEM: ${{ steps.features.outputs.enable_qmodem }}
-          ENABLE_QMODEM_NEXT: ${{ steps.features.outputs.enable_qmodem_next }}
-          ENABLE_QMODEM_LUA: ${{ steps.features.outputs.enable_qmodem_lua }}
+          THREADS: ${{ inputs.threads || '2' }}
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           export PATH="/usr/lib/ccache:$PATH"
-          export THREADS="$(nproc)"
-          echo "🔨 调用 scripts/local-build.sh (${THREADS} threads)..."
           bash scripts/local-build.sh
 
-      - name: 校验产物与最终配置
-        id: artifacts
-        shell: bash
+      - name: Reverse-audit final image inputs
         run: |
-          set -euo pipefail
-          if [ ! -d artifacts ] || [ -z "$(ls -A artifacts 2>/dev/null)" ]; then
-            echo "❌ 未找到任何产物"
-            exit 1
-          fi
-          config="artifacts/build.config"
-          manifest="artifacts/openwrt-image.manifest"
-          [ -f "$config" ] || { echo "❌ 未找到最终 .config"; exit 1; }
-          [ -f "$manifest" ] || { echo "❌ 未找到 H5000M 镜像清单"; exit 1; }
-          for symbol in \
-            'CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton-h5000m=y' \
-            'CONFIG_MTK_HWIFI_WED_SUPPORT=y' \
-            'CONFIG_PACKAGE_kmod-mtk_wed=y' \
-            'CONFIG_PACKAGE_kmod-mediatek_hnat=y' \
-            'CONFIG_PACKAGE_kmod-hwmon-pwmfan=y' \
-            'CONFIG_PACKAGE_h5000m-kit=y' \
-            'CONFIG_PACKAGE_luci-app-qmodem-next=y' \
-            'CONFIG_PACKAGE_luci-app-openclash=y'; do
-            grep -qx "$symbol" "$config" || { echo "❌ 缺少最终配置: $symbol"; exit 1; }
-          done
-          for package in kmod-mtk_wed kmod-mediatek_hnat kmod-hwmon-pwmfan h5000m-kit luci-app-qmodem-next luci-app-openclash; do
-            grep -q "^${package}[[:space:]-]" "$manifest" || { echo "❌ 镜像清单缺少: $package"; exit 1; }
-          done
-          [ -s artifacts/sha256sums.txt ] || { echo "❌ 未找到固件 SHA256"; exit 1; }
-          cat artifacts/sha256sums.txt
-          ls -lh artifacts/
-          echo "build_time=$(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$GITHUB_OUTPUT"
+          set -euxo pipefail
+          test -s artifacts/build.config
+          test -s artifacts/H5000M-IDENTITY.txt
+          test -s artifacts/sha256sums.txt
+          grep -q 'source_commit=4fc16f2985a358bd43bb522e43f05395fcbd6ed5' artifacts/H5000M-IDENTITY.txt
+          grep -q 'wifi_stack=official mt76' artifacts/H5000M-IDENTITY.txt
+          grep -q 'fan_boot_duty=89' artifacts/H5000M-IDENTITY.txt
+          grep -q '^CONFIG_TARGET_mediatek=y$' artifacts/build.config
+          grep -q '^CONFIG_TARGET_mediatek_filogic=y$' artifacts/build.config
+          grep -q '^CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton_h5000m=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_luci-app-openclash=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_luci-app-qmodem-next=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_kmod-mt7996e=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_kmod-mt7992-23-firmware=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_mt7987-2p5g-phy-firmware=y$' artifacts/build.config
+          ! grep -qE '^CONFIG_PACKAGE_(luci-app-(nikki|mosdns|homeproxy|turboacc-mtk|Airpifanctrl)|modemmanager|h5000m-kit)=y$' artifacts/build.config
+          grep -q 'hiveton_h5000m-initramfs-kernel.bin' <(find artifacts -maxdepth 1 -type f -printf '%f\n')
+          grep -q 'hiveton_h5000m-squashfs-sysupgrade.bin' <(find artifacts -maxdepth 1 -type f -printf '%f\n')
+          (cd artifacts && sha256sum -c sha256sums.txt)
 
-      - name: 上传固件
+      - name: Upload firmware and provenance
         uses: actions/upload-artifact@v4
         with:
-          name: H5000M-firmware
+          name: H5000M-ImmortalWrt-25.12.2-official-${{ github.sha }}
           path: artifacts/
+          if-no-files-found: error
           retention-days: 30
+
+      - name: ccache statistics
+        if: always()
+        run: ccache -s || true

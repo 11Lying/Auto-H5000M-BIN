@@ -1,0 +1,17 @@
+--- a/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
++++ b/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
+@@ -96,6 +96,14 @@
+ 
+ &fan {
+ 	pwms = <&pwm 1 50000 0>;
++	/*
++	 * Quiet handover: the pwm-fan driver probes with 100% duty by default,
++	 * which is audibly loud. 35% (89/255) is the value the vendor firmware
++	 * uses as its fan start speed, so it is a known-good starting point.
++	 * Only the initial duty is affected; the kernel cooling levels
++	 * (<0 128 192 255>) still drive the fan normally afterwards.
++	 */
++	pwm-fan,boot-duty = <89>;
+ 	status = "okay";
+ };
+ 
