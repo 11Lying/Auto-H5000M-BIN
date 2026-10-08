@@ -131,7 +131,11 @@ jobs:
           set -euxo pipefail
           export PATH="/usr/lib/ccache:$PATH"
           if [[ "${{ inputs.diagnose_libffi }}" == "true" ]]; then
-            bash scripts/local-build.sh --libffi-only
+            if [[ "${{ inputs.confirm_firmware_build }}" == "true" ]]; then
+              bash scripts/local-build.sh --libffi-then-build
+            else
+              bash scripts/local-build.sh --libffi-only
+            fi
           else
             bash scripts/local-build.sh
           fi

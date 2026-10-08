@@ -39,6 +39,7 @@ GIT_CLONE_DEPTH="${GIT_CLONE_DEPTH:-1}"
 CONFIG_ONLY=false
 VERIFY_ONLY=false
 LIBFFI_ONLY=false
+LIBFFI_THEN_BUILD=false
 SKIP_FEEDS_UPDATE="${SKIP_FEEDS_UPDATE:-false}"
 
 usage() {
@@ -47,7 +48,8 @@ Usage: scripts/local-build.sh [options]
 
   --config-only         clone + feeds + patches + .config + verify, do not build
   --verify-only         skip clone/feeds; just apply patches + verify what is there
-  --libffi-only         build only libffi and required prerequisites with V=s
+  --libffi-only         clean/build only libffi and required prerequisites with V=s
+  --libffi-then-build   clean/build libffi with V=s, then continue full firmware build
   --skip-feeds-update   reuse an existing feeds/ tree
 
 Environment: REPO_URL REPO_REF REPO_COMMIT SOURCE_DIR CONFIG_FILE THREADS
@@ -59,6 +61,7 @@ while [ "$#" -gt 0 ]; do
 		--config-only)       CONFIG_ONLY=true ;;
 		--verify-only)       VERIFY_ONLY=true ;;
 		--libffi-only)       LIBFFI_ONLY=true ;;
+		--libffi-then-build) LIBFFI_THEN_BUILD=true ;;
 		--skip-feeds-update) SKIP_FEEDS_UPDATE=true ;;
 		-h|--help)           usage; exit 0 ;;
 		*) echo "Unknown argument: $1" >&2; usage; exit 2 ;;
@@ -167,6 +170,26 @@ apply_patches() {
 			die "failed to apply $p"
 		fi
 	done
+
+	# libffi 3.4.7's configure chooses the target-specific multi-os build
+	# directory (mediatek/filogic here), not GNU_TARGET_NAME*.  InstallDev in
+	# the pinned packages feed still looks only for the obsolete tuple path.
+	# Keep the feed commit pinned and narrowly fix only this generated-header
+	# lookup; the two-level glob matches the configure-created target/subtarget
+	# directory without changing libffi's configure/build behavior.
+	local ffi_makefile="$SOURCE_DIR/feeds/packages/libs/libffi/Makefile"
+	[ -f "$ffi_makefile" ] || die "missing pinned libffi Makefile: $ffi_makefile"
+	python3 - "$ffi_makefile" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+old = "$(PKG_BUILD_DIR)/$(GNU_TARGET_NAME)*/fficonfig.h"
+new = "$(PKG_BUILD_DIR)/*/*/fficonfig.h"
+if s.count(old) != 1:
+    raise SystemExit(f"expected exactly one libffi header lookup, found {s.count(old)}")
+p.write_text(s.replace(old, new))
+PY
+	log "patched pinned libffi InstallDev lookup for target/subtarget build directory"
 }
 
 # ---------------------------------------------------------------------------
@@ -190,10 +213,11 @@ run_build() {
 }
 
 run_libffi_only() {
-	log "diagnostic-only: libffi target and prerequisites, serial V=s; no full firmware build"
-	# Serial execution stops at the first failing prerequisite/package and keeps
-	# the complete first-attempt output for the diagnostic artifact.
-	( cd "$SOURCE_DIR" && make -j1 package/feeds/packages/libffi/compile V=s ) \
+	log "libffi gate: clean only libffi, then compile it serially with V=s"
+	# Clean this package alone as requested; do not remove shared download,
+	# toolchain, staging, ccache, or other package build products.
+	( cd "$SOURCE_DIR" && make package/feeds/packages/libffi/clean V=s && \
+		make -j1 package/feeds/packages/libffi/compile V=s ) \
 		2>&1 | tee "$ROOT_DIR/build.log"
 }
 
@@ -267,10 +291,13 @@ main() {
 	make_config
 	bash "$ROOT_DIR/scripts/verify-config.sh" "$SOURCE_DIR"
 
-	if [ "$LIBFFI_ONLY" = true ]; then
+	if [ "$LIBFFI_ONLY" = true ] || [ "$LIBFFI_THEN_BUILD" = true ]; then
 		run_libffi_only
-		log "libffi-only diagnostic complete; stopping before full firmware build"
-		exit 0
+		if [ "$LIBFFI_ONLY" = true ]; then
+			log "libffi-only diagnostic complete; stopping before full firmware build"
+			exit 0
+		fi
+		log "libffi gate passed; continuing full firmware build with this runner's existing outputs"
 	fi
 
 	if [ "$CONFIG_ONLY" = true ]; then
