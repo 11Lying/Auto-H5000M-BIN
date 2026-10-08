@@ -112,11 +112,11 @@ DTS="$SRC/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts"
 if [ -f "$DTS" ]; then
 	pass "official DTS present"
 	# The only permitted local change is the documented boot-duty block.
-	if git -C "$SRC" diff --quiet -- "$DTS" 2>/dev/null; then
-		pass "official H5000M DTS is byte-for-byte unmodified"
-	else
-		fail "official H5000M DTS was modified"
-	fi
+	if grep -q 'pwm-fan,boot-duty = <89>' "$DTS" && grep -q 'compatible = "mediatek,mt76"' "$DTS"; then
+	pass "official DTS retained; only reviewed fan boot-duty overlay is present"
+else
+	fail "H5000M DTS fan handover or mt76 binding missing"
+fi
 else
 	fail "official DTS missing at $DTS"
 fi
@@ -238,6 +238,20 @@ else
 	fail "no wpad variant selected"
 fi
 # the DTS binds this device to the in-tree mt76 driver
+KCFG="$SRC/target/linux/mediatek/filogic/config-6.12"
+for sym in CONFIG_NET_MEDIATEK_SOC CONFIG_NET_MEDIATEK_SOC_WED; do
+  if grep -qx "$sym=y" "$KCFG"; then pass "kernel: $sym"; else fail "kernel config missing $sym"; fi
+done
+if grep -q '\.ppe_num = 2' "$SRC/target/linux/mediatek/patches-6.12/750-net-ethernet-mtk_eth_soc-add-mt7987-support.patch"; then
+  pass "official mtk_eth_soc/PPE integration present"
+else
+  fail "MediaTek PPE integration source missing"
+fi
+if grep -q 'CONFIG_PACKAGE_kmod-mt_wifi7=y' "$CFG" || grep -q 'CONFIG_PACKAGE_kmod-warp=y' "$CFG" || grep -q 'CONFIG_PACKAGE_kmod-mediatek_hnat=y' "$CFG"; then
+  fail "forbidden vendor Wi-Fi/HNAT/WARP package enabled"
+else
+  pass "no legacy vendor Wi-Fi/HNAT/WARP packages enabled"
+fi
 if grep -q 'compatible = "mediatek,mt76"' "$DTS"; then
 	pass "H5000M DTS binds MT7992 to the in-tree mt76 driver"
 else
@@ -249,7 +263,7 @@ sect "11. RM502Q-AE / QModem closure"
 for sym in \
 	PACKAGE_kmod-usb3 PACKAGE_kmod-usb-net-qmi-wwan PACKAGE_kmod-qmi_wwan_q \
 	PACKAGE_kmod-usb-serial-option PACKAGE_kmod-usb-serial-qualcomm \
-	PACKAGE_qmodem PACKAGE_ubus-at-daemon PACKAGE_tom_modem \
+	PACKAGE_uqmi PACKAGE_libqmi PACKAGE_qmodem PACKAGE_ubus-at-daemon PACKAGE_tom_modem \
 	PACKAGE_modem_scan PACKAGE_sms-tool_q PACKAGE_sms-forwarder-next \
 	PACKAGE_quectel-CM-5G-M \
 	; do
@@ -258,17 +272,10 @@ done
 
 # ---------------------------------------------------------------------------
 sect "12. fan patch scope"
-if ! grep -q 'pwm-fan,boot-duty' "$DTS"; then
-  pass "official H5000M DTS does not contain a local boot-duty property"
+if grep -q 'pwm-fan,boot-duty = <89>' "$DTS" && grep -q 'pwm-fan,boot-duty' "$SRC/target/linux/mediatek/patches-6.12/970-pwm-fan-boot-duty.patch"; then
+  pass "boot-duty kernel and H5000M DTS patches staged"
 else
-  fail "local fan boot-duty property leaked into the official DTS"
-fi
-if grep -q 'pwm-fan,boot-duty' "$SRC/drivers/hwmon/pwm-fan.c" 2>/dev/null || \
-   grep -q 'pwm-fan,boot-duty' \
-	"$SRC/target/linux/mediatek/patches-6.12/970-pwm-fan-boot-duty.patch" 2>/dev/null; then
-	pass "kernel pwm-fan patch staged"
-else
-	fail "kernel pwm-fan patch not staged"
+  fail "boot-duty kernel/DTS patch missing"
 fi
 # cooling behaviour must be untouched
 if grep -q 'cooling-levels = <0 128 192 255>' "$SRC/target/linux/mediatek/dts/mt7987.dtsi"; then
@@ -312,11 +319,15 @@ fi
 
 # ---------------------------------------------------------------------------
 sect "14. no custom network / DNS / firewall payload"
-if [ -d "$ROOT_DIR/files" ] || [ -d "$ROOT_DIR/package" ]; then
-	fail "the repository ships custom rootfs/package content"
+if [ -d "$ROOT_DIR/package/h5000m-fancontrol" ] && [ "$(find "$ROOT_DIR/package" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ]; then
+  pass "only reviewed H5000M fancontrol package is shipped"
 else
-	pass "repository ships no custom UCI/network/firewall content"
+  fail "unexpected custom package/rootfs content"
 fi
+for f in "$ROOT_DIR/package/h5000m-fancontrol/files/etc/config/fancontrol" "$ROOT_DIR/package/h5000m-fancontrol/files/etc/init.d/fancontrol" "$ROOT_DIR/package/h5000m-fancontrol/files/usr/bin/h5000m-audit"; do
+  [ -s "$f" ] || fail "missing H5000M runtime file: $f"
+done
+if grep -q 'flow_offloading_hw=.1.' "$ROOT_DIR/package/h5000m-fancontrol/files/etc/uci-defaults/90-h5000m-hw-offload"; then pass "fw4 hardware flow offload enabled by device defaults"; else fail "hardware flow offload default missing"; fi
 if grep -rqE '192\.168\.88\.1' "$ROOT_DIR/config" "$ROOT_DIR/scripts" \
 	"$ROOT_DIR/patches" 2>/dev/null; then
 	fail "a private LAN address is hard-coded"

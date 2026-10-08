@@ -111,17 +111,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: immortalwrt/dl
-          key: ${{ runner.os }}-dl-${{ env.SOURCE_COMMIT }}-${{ hashFiles('feeds.conf.default', 'config/**', 'patches/**', 'scripts/**') }}
+          key: ${{ runner.os }}-dl-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-aarch64-gcc14-musl-k6.12-${{ hashFiles('feeds.conf.default', 'config/**', 'patches/**', 'scripts/**') }}
           restore-keys: |
-            ${{ runner.os }}-dl-${{ env.SOURCE_COMMIT }}-
+            ${{ runner.os }}-dl-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-aarch64-gcc14-musl-k6.12-
 
       - name: Restore ccache
         uses: actions/cache@v4
         with:
           path: .ccache
-          key: ${{ runner.os }}-ccache-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-${{ env.DEVICE }}-${{ hashFiles('config/**', 'patches/**', 'feeds.conf.default') }}
+          key: ${{ runner.os }}-ccache-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-aarch64-gcc14-musl-k6.12-${{ env.DEVICE }}-${{ hashFiles('config/**', 'patches/**', 'feeds.conf.default') }}
           restore-keys: |
-            ${{ runner.os }}-ccache-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-${{ env.DEVICE }}-
+            ${{ runner.os }}-ccache-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-aarch64-gcc14-musl-k6.12-${{ env.DEVICE }}-
 
       - name: Build firmware
         env:
@@ -137,7 +137,7 @@ jobs:
               bash scripts/local-build.sh --libffi-only
             fi
           else
-            bash scripts/local-build.sh
+            bash scripts/local-build.sh --libffi-then-build
           fi
 
       - name: Gather libffi diagnostic inputs
@@ -187,18 +187,25 @@ jobs:
           test -s artifacts/sha256sums.txt
           grep -q 'source_commit=4fc16f2985a358bd43bb522e43f05395fcbd6ed5' artifacts/H5000M-IDENTITY.txt
           grep -q 'wifi_stack=official mt76' artifacts/H5000M-IDENTITY.txt
-          grep -q 'fan_patches=970+971 applied; 972 retained-not-applied (DTS unchanged)' artifacts/H5000M-IDENTITY.txt
+          grep -q 'fan_patches=970+971+972 applied; upstream thermal trips retained' artifacts/H5000M-IDENTITY.txt
           grep -q '^CONFIG_TARGET_mediatek=y$' artifacts/build.config
           grep -q '^CONFIG_TARGET_mediatek_filogic=y$' artifacts/build.config
           grep -q '^CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton_h5000m=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_luci-app-openclash=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_luci-app-qmodem-next=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_h5000m-fancontrol=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_kmod-mt7996e=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_kmod-mt76-core=y$' artifacts/build.config
+          grep -q '^CONFIG_NET_MEDIATEK_SOC_WED=y$' immortalwrt/target/linux/mediatek/filogic/config-6.12
           grep -q '^CONFIG_PACKAGE_kmod-mt7992-23-firmware=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_mt7987-2p5g-phy-firmware=y$' artifacts/build.config
           ! grep -qE '^CONFIG_PACKAGE_(luci-app-(nikki|mosdns|homeproxy|turboacc-mtk|Airpifanctrl)|modemmanager|h5000m-kit)=y$' artifacts/build.config
           grep -q 'hiveton_h5000m-initramfs-kernel.bin' <(find artifacts -maxdepth 1 -type f -printf '%f\n')
           grep -q 'hiveton_h5000m-squashfs-sysupgrade.bin' <(find artifacts -maxdepth 1 -type f -printf '%f\n')
+          grep -q 'h5000m-fancontrol' artifacts/openwrt-image.manifest
+          grep -q 'kmod-mt7992-23-firmware' artifacts/openwrt-image.manifest
+          grep -q 'luci-app-openclash' artifacts/openwrt-image.manifest
+          grep -q 'luci-app-qmodem-next' artifacts/openwrt-image.manifest
           (cd artifacts && sha256sum -c sha256sums.txt)
 
       - name: Upload firmware and provenance

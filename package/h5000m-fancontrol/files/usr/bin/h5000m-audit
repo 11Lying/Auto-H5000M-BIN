@@ -1,0 +1,16 @@
+#!/bin/sh
+# Read-only post-flash diagnostic report. Missing optional tools are reported, not fatal.
+section() { printf '\n=== %s ===\n' "$1"; }
+run() { command -v "$1" >/dev/null 2>&1 && "$@" 2>&1 || echo "(unavailable: $1)"; }
+section BOARD; cat /tmp/sysinfo/board_name /tmp/sysinfo/model 2>/dev/null
+section KERNEL; uname -a
+section WIFI_MT7992; run iw phy; run iw dev; dmesg | grep -iE 'mt7992|mtk.*wifi|firmware.*(mt799|mediatek)' | tail -80
+section WED; lsmod | grep -iE 'wed|warp|mtk' || true; find /sys/kernel/debug -maxdepth 3 -iname '*wed*' -o -iname '*ppe*' 2>/dev/null | head -40
+section PPE; dmesg | grep -iE 'ppe|mtk_eth|mtk.*eth' | tail -80; find /sys/kernel/debug -maxdepth 4 -iname '*hnat*' -o -iname '*ppe*' 2>/dev/null | head -50
+section FLOW_OFFLOAD; uci -q show firewall | grep -E 'flow_offloading' || true; nft list ruleset 2>/dev/null | grep -i -A5 -B2 flowtable || true
+section QMI; lsusb 2>/dev/null; ip -d link; ls -l /dev/cdc-wdm* /dev/ttyUSB* 2>/dev/null
+section QMODEM; ubus list 2>/dev/null | grep -iE 'qmodem|at-daemon' || true; /etc/init.d/qmodem status 2>&1 || true
+section OPENCLASH; opkg list-installed 2>/dev/null | grep -i openclash || true; pgrep -af 'mihomo|clash' 2>/dev/null || true
+section FAN; /etc/init.d/fancontrol status 2>&1 || true; for h in /sys/class/hwmon/hwmon*; do [ -r "$h/name" ] && { printf '%s ' "$h"; cat "$h/name"; ls "$h"/pwm1 2>/dev/null; }; done; uci -q show fancontrol
+section TEMPERATURE; for z in /sys/class/thermal/thermal_zone*; do [ -r "$z/temp" ] && printf '%s %s %s\n' "$z" "$(cat "$z/type" 2>/dev/null)" "$(cat "$z/temp")"; done
+section STORAGE; df -h; cat /proc/partitions

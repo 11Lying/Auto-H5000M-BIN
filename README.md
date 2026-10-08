@@ -36,7 +36,7 @@ The stock H5000M image also retains the packages declared by the official device
 - `kmod-mt7992-23-firmware`
 - filesystem/automount utilities declared upstream
 
-No custom network, firewall, DHCP, WAN, IPv6, DNS or OpenClash routing configuration is baked into the image.
+The only custom network default is fw4 hardware/software flow offload enablement; WAN, IPv6, DNS, and OpenClash routing remain user-configured.
 
 ## Community patch audit
 
@@ -50,13 +50,13 @@ No custom network, firewall, DHCP, WAN, IPv6, DNS or OpenClash routing configura
 | MT7992 firmware/eeprom changes | Vendor Wi-Fi tree changes | Official target selects upstream mt76 and `kmod-mt7992-23-firmware`; official DTS binds `mediatek,mt76` | **Not imported** |
 | fan startup patch | Official 6.12 `pwm-fan` probes at 100% and has no boot-duty property | Not upstream; verified necessary for the requested startup-noise fix | **Minimal patch only** |
 
-## Fan change
+## Fan control and startup handover
 
-- `970-pwm-fan-boot-duty.patch`: optional initial-duty support in the upstream 6.12 `pwm-fan` driver. Retained for review; not applied in this build because the official H5000M DTS must remain unchanged.
-- `971-hwmon-pwmfan-boot-autoload.patch`: uses the official early-module autoload mechanism for Mediatek so `pwm-fan` can be loaded in the boot module pass. This is applied.
-- `972-h5000m-fan-boot-duty.patch`: retained unchanged as the previously reviewed H5000M boot-duty DTS proposal, but deliberately **not applied**. Applying it would modify the official DTS, contrary to the current build requirement.
+The official H5000M DTS remains the base. A narrowly-scoped board overlay adds `pwm-fan,boot-duty = <89>` (about 35% of 255) to prevent the upstream driver's 100% probe duty. The upstream `pwm-fan` driver gets the matching optional-property patch; the stock thermal cooling levels and critical trips are unchanged. A module autoload patch loads pwm-fan in the early module pass.
 
-No DTS file is modified. Official thermal cooling levels and protection remain unchanged: `<0 128 192 255>`, with the upstream thermal trip points. There is no second fan daemon and no forced CPU/fan policy.
+The local `h5000m-fancontrol` package starts at init priority 15, after the early module loader. It applies the configured temperature curve, immediately raises PWM, delays/hysteresis-protects reductions, takes over the shared CPU thermal governor, and restores it on exit. The defaults use the existing H5000M curve, 5-second sampling, 3°C hysteresis, 5-second down-delay, Wi-Fi temperature with 5°C offset, and a 153/255 safe PWM only if both temperature sources fail at startup. Runtime boot timing and acoustic behavior still require a post-flash hardware check.
+
+A read-only `/usr/bin/h5000m-audit` reports board, Wi-Fi, PPE/WED, flow-offload, modem, OpenClash and fan state. The first-boot defaults enable fw4 software and hardware flow offload; this configures the official PPE path but does not itself prove that PPE offload is active at runtime.
 
 ## CPUFreq
 

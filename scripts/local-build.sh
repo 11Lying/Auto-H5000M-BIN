@@ -18,6 +18,7 @@
 #   scripts/local-build.sh [--config-only] [--verify-only] [--skip-feeds-update]
 # ============================================================================
 set -Eeuo pipefail
+umask 022
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -158,11 +159,15 @@ apply_patches() {
 	cp -f "$ROOT_DIR/patches/970-pwm-fan-boot-duty.patch" "$dir/" \
 		|| die "could not stage kernel patch"
 	log "staged target/linux/mediatek/patches-6.12/970-pwm-fan-boot-duty.patch"
+	# Include the maintained userspace controller and read-only audit utility.
+	rm -rf "$SOURCE_DIR/package/h5000m-fancontrol"
+	cp -a "$ROOT_DIR/package/h5000m-fancontrol" "$SOURCE_DIR/package/h5000m-fancontrol"
+	log "staged H5000M fan-control package"
 
 	# Keep all three reviewed fan patch records in the repository, but the
 	# board-specific DTS patch is deliberately not applied: user requires the
 	# official H5000M DTS byte-for-byte unchanged.
-	for p in 971-hwmon-pwmfan-boot-autoload.patch; do
+	for p in 971-hwmon-pwmfan-boot-autoload.patch 972-h5000m-fan-boot-duty.patch; do
 		[ -f "$ROOT_DIR/patches/$p" ] || die "missing patch $p"
 		if patch -d "$SOURCE_DIR" -p1 --forward --silent < "$ROOT_DIR/patches/$p"; then
 			log "applied $p"
@@ -223,6 +228,7 @@ run_libffi_only() {
 	( cd "$SOURCE_DIR" && \
 		make tools/compile V=s && \
 		make toolchain/compile V=s && \
+		make toolchain/install V=s && \
 		test -n "$(find staging_dir/toolchain-* -type f -name 'libgcc_s.so.*' -print -quit)" && \
 		test -x staging_dir/host/bin/libdeflate-gzip && \
 		test -s staging_dir/host/lib/meson/openwrt-native.txt.in && \
@@ -231,7 +237,10 @@ run_libffi_only() {
 		make package/system/apk/host/compile V=s && \
 		log "host tools, target toolchain, Lua, and APK staged; now clean only libffi" && \
 		make package/feeds/packages/libffi/clean V=s && \
-		make -j1 package/feeds/packages/libffi/compile V=s ) \
+		make -j1 package/feeds/packages/libffi/compile V=s && \
+		make -j1 package/feeds/packages/libffi/install V=s && \
+		for f in fficonfig.h ffi.h ffitarget.h; do test -n "$(find staging_dir -type f -name "$f" -print -quit)" || exit 1; done && \
+		test -n "$(find staging_dir -type f -name 'libffi.so*' -print -quit)" ) \
 		2>&1 | tee "$ROOT_DIR/build.log"
 }
 
@@ -271,7 +280,7 @@ collect() {
 		echo "target=mediatek/filogic"
 		echo "kernel=$(sed -n 's/^LINUX_VERSION-6\.12 = //p' "$SOURCE_DIR/target/linux/generic/kernel-6.12")"
 		echo "wifi_stack=official mt76 (kmod-mt7996e + kmod-mt7992-23-firmware)"
-		echo "fan_patches=970+971 applied; 972 retained-not-applied (DTS unchanged)"
+		echo "fan_patches=970+971+972 applied; upstream thermal trips retained"
 		echo "--- feeds ---"
 		grep '^src-git' "$SOURCE_DIR/feeds.conf.default"
 		echo "--- openclash ---"
