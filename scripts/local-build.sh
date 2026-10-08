@@ -226,15 +226,15 @@ run_libffi_only() {
 	# Package-only goals bypass the top-level target-toolchain phase. Stage
 	# libgcc_s explicitly so the libgcc IPK prerequisite is present.
 	( cd "$SOURCE_DIR" && \
-		make tools/compile V=s && \
-		make toolchain/compile V=s && \
-		make toolchain/install V=s && \
+		make -j"$THREADS" tools/compile V=s && \
+		make -j"$THREADS" toolchain/compile V=s && \
+		make -j"$THREADS" toolchain/install V=s && \
 		test -n "$(find staging_dir/toolchain-* -type f -name 'libgcc_s.so.*' -print -quit)" && \
 		test -x staging_dir/host/bin/libdeflate-gzip && \
 		test -s staging_dir/host/lib/meson/openwrt-native.txt.in && \
 		test -s staging_dir/host/lib/meson/openwrt-cross.txt.in && \
-		make package/utils/lua/host/compile V=s && \
-		make package/system/apk/host/compile V=s && \
+		make -j"$THREADS" package/utils/lua/host/compile V=s && \
+		make -j"$THREADS" package/system/apk/host/compile V=s && \
 		log "host tools, target toolchain, Lua, and APK staged; now clean only libffi" && \
 		make package/feeds/packages/libffi/clean V=s && \
 		make -j1 package/feeds/packages/libffi/compile V=s && \
