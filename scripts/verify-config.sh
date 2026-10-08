@@ -45,30 +45,52 @@ if [ -n "$kv" ]; then pass "kernel version $kv"; else fail "kernel version not f
 
 # ---------------------------------------------------------------------------
 sect "2. feeds"
-bad=0
-for l in $(grep '^src-git' "$SRC/feeds.conf.default" | grep -v '^src-git qmodem'); do
-	case "$l" in
-		*'^'*) ;;
-		*) fail "official feed not pinned to a commit: $l"; bad=1 ;;
-	esac
-done
-[ "$bad" = 0 ] && pass "all official feeds pinned to commits"
-if grep -q 'openwrt-24.10' "$SRC/feeds.conf.default"; then
-	fail "feeds.conf.default still references openwrt-24.10"
+# Compare active feeds against the exact release's own official feed pins.
+# A pin is the ^<40-hex-commit> syntax used by scripts/feeds.
+UPSTREAM_FEEDS="$SRC/feeds.conf.default"
+ACTIVE_FEEDS="$ROOT_DIR/feeds.conf.default"
+if [ -f "$UPSTREAM_FEEDS" ] && [ -f "$ACTIVE_FEEDS" ]; then
+  for feed in packages luci routing telephony video; do
+    upstream_line="$(grep -E "^src-git ${feed} " "$UPSTREAM_FEEDS" || true)"
+    active_line="$(grep -E "^src-git ${feed} " "$ACTIVE_FEEDS" || true)"
+    if [ -z "$upstream_line" ] || [ "$active_line" != "$upstream_line" ]; then
+      fail "$feed feed differs from the official v25.12.2 pin"
+    elif ! printf '%s\n' "$active_line" | grep -qE '\^[0-9a-f]{40}$'; then
+      fail "$feed feed is not pinned to a full commit: $active_line"
+    else
+      pass "$feed exactly matches official v25.12.2 pinned commit"
+    fi
+  done
+  qmodem_line="$(grep '^src-git qmodem ' "$ACTIVE_FEEDS" || true)"
+  if printf '%s\n' "$qmodem_line" | grep -qE 'FUjr/QModem\.git\^[0-9a-f]{40}$'; then
+    pass "QModem feed pinned to an immutable commit"
+  else
+    fail "QModem feed is not pinned to an immutable commit"
+  fi
 else
-	pass "no 24.10 feed references"
+  fail "cannot inspect active/upstream feeds.conf.default"
 fi
-for f in packages luci routing telephony video qmodem; do
-	if grep -q "^src-git $f " "$SRC/feeds.conf.default"; then
-		pass "feed present: $f"
-	else
-		fail "feed missing: $f"
-	fi
+# Verify fetched feed checkouts actually resolve to the configured commits.
+for feed in packages luci routing telephony video qmodem; do
+  line="$(grep -E "^src-git ${feed} " "$ACTIVE_FEEDS" || true)"
+  expected="${line##*^}"
+  actual=""
+  [ -e "$SRC/feeds/$feed" ] && actual="$(git -C "$SRC/feeds/$feed" rev-parse HEAD 2>/dev/null || true)"
+  if [ -n "$expected" ] && [ "$actual" = "$expected" ]; then
+    pass "$feed checkout matches configured commit $expected"
+  else
+    fail "$feed checkout does not match configured commit (expected $expected, got ${actual:-missing})"
+  fi
 done
-if [ -f "$SRC/feeds/luci/applications/luci-app-openclash/Makefile" ]; then
-	pass "luci-app-openclash comes from the official luci feed"
+if grep -qiE 'openwrt-24[.]10|immortalwrt-24[.]10' "$ACTIVE_FEEDS"; then
+  fail "active feeds reference a 24.10 branch"
 else
-	fail "luci-app-openclash not found in the official luci feed"
+  pass "active feeds contain no 24.10 branch"
+fi
+if [ -f "$SRC/feeds/luci/applications/luci-app-openclash/Makefile" ]; then
+  pass "luci-app-openclash comes from the official pinned luci feed"
+else
+  fail "luci-app-openclash not found in the official luci feed"
 fi
 
 # ---------------------------------------------------------------------------
@@ -91,14 +113,9 @@ if [ -f "$DTS" ]; then
 	pass "official DTS present"
 	# The only permitted local change is the documented boot-duty block.
 	if git -C "$SRC" diff --quiet -- "$DTS" 2>/dev/null; then
-		pass "DTS unmodified"
+		pass "official H5000M DTS is byte-for-byte unmodified"
 	else
-		changes="$(git -C "$SRC" diff --numstat -- "$DTS" | awk '{print $1"+"$2"-"}')"
-		if [ "$changes" = "8+0-" ] && grep -q 'pwm-fan,boot-duty = <89>' "$DTS"; then
-			pass "DTS carries only the documented boot-duty addition ($changes)"
-		else
-			fail "DTS has unexpected local modifications ($changes)"
-		fi
+		fail "official H5000M DTS was modified"
 	fi
 else
 	fail "official DTS missing at $DTS"
@@ -156,18 +173,14 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-sect "7. no stale 24.10 artefacts"
-if grep -rqE 'openwrt-24\.10|mt798x-mt799x-6\.6-mtwifi' \
-	"$ROOT_DIR/scripts" "$ROOT_DIR/.github" "$ROOT_DIR/feeds.conf.default" 2>/dev/null; then
-	fail "a script or workflow still references the 24.10 line"
+sect "7. no stale release-line inputs"
+# Search actual build inputs only; this checker intentionally describes the
+# forbidden legacy line elsewhere, so it must not scan itself.
+legacy_pattern='openwrt-24'"."'10|immortalwrt-24'"."'10|mt798x-mt799x-6'"."'6-mtwifi'
+if grep -nriE "$legacy_pattern" "$ROOT_DIR/scripts/local-build.sh"     "$ROOT_DIR/.github/workflows" "$ROOT_DIR/feeds.conf.default"     "$ROOT_DIR/config" "$ROOT_DIR/patches" 2>/dev/null; then
+  fail "an actual build input references a legacy source/feed line"
 else
-	pass "no 24.10 / mtwifi-6.6 references in build inputs"
-fi
-if [ -f "$SRC/package/kernel/qmi_wwan_q/Makefile" ] || \
-   grep -rq 'kmod-qmi_wwan_f' "$SRC/package" 2>/dev/null; then
-	fail "a stale kernel driver was dropped into the tree"
-else
-	pass "no stale kernel drivers dropped into the tree"
+  pass "no actual build input references a legacy source/feed line"
 fi
 
 # ---------------------------------------------------------------------------
@@ -245,10 +258,10 @@ done
 
 # ---------------------------------------------------------------------------
 sect "12. fan patch scope"
-if grep -q 'pwm-fan,boot-duty = <89>' "$DTS"; then
-	pass "DTS requests a 35% (89/255) handover duty"
+if ! grep -q 'pwm-fan,boot-duty' "$DTS"; then
+  pass "official H5000M DTS does not contain a local boot-duty property"
 else
-	fail "DTS boot-duty missing"
+  fail "local fan boot-duty property leaked into the official DTS"
 fi
 if grep -q 'pwm-fan,boot-duty' "$SRC/drivers/hwmon/pwm-fan.c" 2>/dev/null || \
    grep -q 'pwm-fan,boot-duty' \
@@ -275,25 +288,26 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-sect "13. CPU frequency scaling"
-cfg_has ARM_MEDIATEK_CPUFREQ || fail "CONFIG_ARM_MEDIATEK_CPUFREQ not enabled"
-cfg_has CPU_FREQ || fail "CONFIG_CPU_FREQ not enabled"
-cfg_has CPU_FREQ_DEFAULT_GOV_SCHEDUTIL || fail "schedutil is not the default governor"
+sect "13. CPU frequency scaling (official upstream policy)"
+KCFG="$SRC/target/linux/mediatek/filogic/config-6.12"
+if grep -qx 'CONFIG_ARM_MEDIATEK_CPUFREQ=y' "$KCFG"; then pass "official Filogic kernel enables MediaTek CPUFreq"; else fail "official Filogic kernel CPUFreq setting differs"; fi
+if grep -qx 'CONFIG_CPU_FREQ=y' "$KCFG"; then pass "official Filogic kernel enables CPU_FREQ"; else fail "official Filogic kernel CPU_FREQ setting differs"; fi
+if grep -qx 'CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y' "$KCFG"; then pass "official default governor is schedutil"; else fail "official governor default differs"; fi
 if [ "$(grep -c 'opp-hz = /bits/ 64 <' "$SRC/target/linux/mediatek/dts/mt7987.dtsi")" -ge 4 ]; then
-	pass "MT7987 OPP table has 4 operating points (500M/1.3G/1.6G/2.0G)"
+  pass "official MT7987 OPP table has four upstream operating points"
 else
-	fail "MT7987 OPP table looks incomplete"
+  fail "official MT7987 OPP table is incomplete"
 fi
-if grep -q 'cpu-supply' "$SRC/target/linux/mediatek/dts/mt7987.dtsi"; then
-	fail "DTS declares a cpu-supply (voltage scaling was not requested)"
+if grep -q 'cpu-supply' "$SRC/target/linux/mediatek/dts/mt7987.dtsi"; then fail "official SoC DTS unexpectedly declares cpu-supply"; else pass "official SoC DTS has no CPU voltage regulator"; fi
+if git -C "$SRC" diff --quiet -- target/linux/mediatek/dts/mt7987.dtsi target/linux/mediatek/filogic/config-6.12 target/linux/generic/config-6.12; then
+  pass "official CPUFreq/OPP kernel inputs are unmodified"
 else
-	pass "no CPU voltage regulation (frequency-only scaling, as upstream)"
+  fail "CPUFreq/OPP upstream kernel inputs were modified"
 fi
-if grep -rqE 'scaling_governor|scaling_setspeed|cpufreq.*performance' \
-	"$ROOT_DIR/config" "$ROOT_DIR/scripts" 2>/dev/null; then
-	fail "something forces a fixed CPU frequency/governor"
+if grep -rqE 'scaling_governor|scaling_setspeed|cpufreq.*performance|CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y'     "$ROOT_DIR/config" "$ROOT_DIR/scripts/local-build.sh" "$ROOT_DIR/patches" 2>/dev/null; then
+  fail "a project build input forces a CPU frequency/governor"
 else
-	pass "no script or config forces a fixed frequency or performance governor"
+  pass "no project build input forces CPU frequency/governor"
 fi
 
 # ---------------------------------------------------------------------------

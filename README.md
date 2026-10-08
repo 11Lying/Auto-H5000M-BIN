@@ -52,13 +52,11 @@ No custom network, firewall, DHCP, WAN, IPv6, DNS or OpenClash routing configura
 
 ## Fan change
 
-Three minimal, separately auditable changes are applied:
+- `970-pwm-fan-boot-duty.patch`: optional initial-duty support in the upstream 6.12 `pwm-fan` driver. Retained for review; not applied in this build because the official H5000M DTS must remain unchanged.
+- `971-hwmon-pwmfan-boot-autoload.patch`: uses the official early-module autoload mechanism for Mediatek so `pwm-fan` can be loaded in the boot module pass. This is applied.
+- `972-h5000m-fan-boot-duty.patch`: retained unchanged as the previously reviewed H5000M boot-duty DTS proposal, but deliberately **not applied**. Applying it would modify the official DTS, contrary to the current build requirement.
 
-- `970-pwm-fan-boot-duty.patch`: optional `pwm-fan,boot-duty` property in the official 6.12 `pwm-fan` driver. It changes only the initial probe duty; it does not alter thermal trips or cooling levels.
-- `971-hwmon-pwmfan-boot-autoload.patch`: uses the official `AutoLoad(..., boot=1)` mechanism for Mediatek so `pwm-fan` is included in `modules-boot.d`.
-- `972-h5000m-fan-boot-duty.patch`: official H5000M DTS only adds `pwm-fan,boot-duty = <89>` (35%). This value matches the vendor firmware's observed `start_speed=35`; 20% was rejected as insufficiently evidenced.
-
-Official thermal cooling levels and protection remain unchanged: `<0 128 192 255>`, with the upstream thermal trip points. There is no second fan daemon and no forced CPU/fan policy.
+No DTS file is modified. Official thermal cooling levels and protection remain unchanged: `<0 128 192 255>`, with the upstream thermal trip points. There is no second fan daemon and no forced CPU/fan policy.
 
 ## CPUFreq
 

@@ -20,8 +20,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: h5000m-25.12.2-${{ github.ref }}
-  cancel-in-progress: true
+  # Keep push validation and explicitly dispatched builds from cancelling
+  # one another on the same ref.
+  group: h5000m-25.12.2-${{ github.run_id }}
+  cancel-in-progress: false
 
 env:
   SOURCE_COMMIT: 4fc16f2985a358bd43bb522e43f05395fcbd6ed5
@@ -138,7 +140,7 @@ jobs:
           test -s artifacts/sha256sums.txt
           grep -q 'source_commit=4fc16f2985a358bd43bb522e43f05395fcbd6ed5' artifacts/H5000M-IDENTITY.txt
           grep -q 'wifi_stack=official mt76' artifacts/H5000M-IDENTITY.txt
-          grep -q 'fan_boot_duty=89' artifacts/H5000M-IDENTITY.txt
+          grep -q 'fan_patches=970+971 applied; 972 retained-not-applied (DTS unchanged)' artifacts/H5000M-IDENTITY.txt
           grep -q '^CONFIG_TARGET_mediatek=y$' artifacts/build.config
           grep -q '^CONFIG_TARGET_mediatek_filogic=y$' artifacts/build.config
           grep -q '^CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton_h5000m=y$' artifacts/build.config

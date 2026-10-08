@@ -8,7 +8,7 @@
 #   2. verify our feeds.conf.default against the one shipped in that tag,
 #      then add the single extra feed (QModem, pinned)
 #   3. feeds update / install
-#   4. apply three H5000M patches (all documented in README.md)
+#   4. apply only the permitted fan patches; keep the DTS byte-for-byte upstream
 #   5. copy config/h5000m.config -> .config, run `make defconfig`
 #   6. run the static verification suite (scripts/verify-config.sh)
 #   7. make
@@ -153,7 +153,10 @@ apply_patches() {
 		|| die "could not stage kernel patch"
 	log "staged target/linux/mediatek/patches-6.12/970-pwm-fan-boot-duty.patch"
 
-	for p in 971-hwmon-pwmfan-boot-autoload.patch 972-h5000m-fan-boot-duty.patch; do
+	# Keep all three reviewed fan patch records in the repository, but the
+	# board-specific DTS patch is deliberately not applied: user requires the
+	# official H5000M DTS byte-for-byte unchanged.
+	for p in 971-hwmon-pwmfan-boot-autoload.patch; do
 		[ -f "$ROOT_DIR/patches/$p" ] || die "missing patch $p"
 		if patch -d "$SOURCE_DIR" -p1 --forward --silent < "$ROOT_DIR/patches/$p"; then
 			log "applied $p"
@@ -218,7 +221,7 @@ collect() {
 		echo "target=mediatek/filogic"
 		echo "kernel=$(sed -n 's/^LINUX_VERSION-6\.12 = //p' "$SOURCE_DIR/target/linux/generic/kernel-6.12")"
 		echo "wifi_stack=official mt76 (kmod-mt7996e + kmod-mt7992-23-firmware)"
-		echo "fan_boot_duty=89 (35%)"
+		echo "fan_patches=970+971 applied; 972 retained-not-applied (DTS unchanged)"
 		echo "--- feeds ---"
 		grep '^src-git' "$SOURCE_DIR/feeds.conf.default"
 		echo "--- openclash ---"
