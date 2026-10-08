@@ -48,11 +48,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install validation dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends git patch bash coreutils
-
       - name: Shell syntax and repository hygiene
         run: |
           set -euxo pipefail
