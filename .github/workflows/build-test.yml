@@ -15,6 +15,11 @@ on:
         required: false
         default: '2'
         type: string
+      diagnose_libffi:
+        description: Build only libffi and required prerequisites with V=s
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -80,7 +85,7 @@ jobs:
 
   build:
     name: Build official H5000M firmware
-    if: github.event_name == 'workflow_dispatch' && inputs.confirm_firmware_build == true
+    if: github.event_name == 'workflow_dispatch' && (inputs.confirm_firmware_build == true || inputs.diagnose_libffi == true)
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 600
@@ -130,18 +135,52 @@ jobs:
         run: |
           set -euxo pipefail
           export PATH="/usr/lib/ccache:$PATH"
-          bash scripts/local-build.sh
+          if [[ "${{ inputs.diagnose_libffi }}" == "true" ]]; then
+            bash scripts/local-build.sh --libffi-only
+          else
+            bash scripts/local-build.sh
+          fi
+
+      - name: Gather libffi diagnostic inputs
+        if: always() && inputs.diagnose_libffi == true
+        run: |
+          set -eu
+          mkdir -p diagnostic/libffi
+          [ ! -f build.log ] || cp build.log diagnostic/libffi/
+          if [ -d immortalwrt/build_dir ]; then
+            find immortalwrt/build_dir -type f \
+              \( -name config.log -o -name fficonfig.h.in -o -name fficonfig.h \) \
+              -print > diagnostic/libffi/files-found.txt
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              mkdir -p "diagnostic/libffi/$(dirname "$f")"
+              cp -p "$f" "diagnostic/libffi/$f"
+            done < diagnostic/libffi/files-found.txt
+          fi
+          {
+            echo "repository_commit=${GITHUB_SHA}"
+            echo "upstream_commit=${SOURCE_COMMIT}"
+            echo "target=${TARGET}"
+            echo "device=${DEVICE}"
+            [ ! -f immortalwrt/.config ] || sha256sum immortalwrt/.config
+            [ ! -f immortalwrt/feeds.conf.default ] || sha256sum immortalwrt/feeds.conf.default
+          } > diagnostic/libffi/BUILD-INPUTS.txt
 
       - name: Upload first-attempt build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: H5000M-25.12.2-build-log-${{ github.sha }}
-          path: build.log
+          path: |
+            build.log
+            diagnostic/libffi/**
+            immortalwrt/.config
+            immortalwrt/feeds.conf.default
           if-no-files-found: warn
           retention-days: 14
 
       - name: Reverse-audit final image inputs
+        if: inputs.confirm_firmware_build == true
         run: |
           set -euxo pipefail
           test -s artifacts/build.config
@@ -164,6 +203,7 @@ jobs:
           (cd artifacts && sha256sum -c sha256sums.txt)
 
       - name: Upload firmware and provenance
+        if: inputs.confirm_firmware_build == true
         uses: actions/upload-artifact@v4
         with:
           name: H5000M-ImmortalWrt-25.12.2-official-${{ github.sha }}

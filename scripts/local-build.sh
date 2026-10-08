@@ -38,6 +38,7 @@ GIT_CLONE_DEPTH="${GIT_CLONE_DEPTH:-1}"
 
 CONFIG_ONLY=false
 VERIFY_ONLY=false
+LIBFFI_ONLY=false
 SKIP_FEEDS_UPDATE="${SKIP_FEEDS_UPDATE:-false}"
 
 usage() {
@@ -46,6 +47,7 @@ Usage: scripts/local-build.sh [options]
 
   --config-only         clone + feeds + patches + .config + verify, do not build
   --verify-only         skip clone/feeds; just apply patches + verify what is there
+  --libffi-only         build only libffi and required prerequisites with V=s
   --skip-feeds-update   reuse an existing feeds/ tree
 
 Environment: REPO_URL REPO_REF REPO_COMMIT SOURCE_DIR CONFIG_FILE THREADS
@@ -56,6 +58,7 @@ while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--config-only)       CONFIG_ONLY=true ;;
 		--verify-only)       VERIFY_ONLY=true ;;
+		--libffi-only)       LIBFFI_ONLY=true ;;
 		--skip-feeds-update) SKIP_FEEDS_UPDATE=true ;;
 		-h|--help)           usage; exit 0 ;;
 		*) echo "Unknown argument: $1" >&2; usage; exit 2 ;;
@@ -186,6 +189,14 @@ run_build() {
 	( cd "$SOURCE_DIR" && make -j"$THREADS" V=s ) 2>&1 | tee "$ROOT_DIR/build.log"
 }
 
+run_libffi_only() {
+	log "diagnostic-only: libffi target and prerequisites, serial V=s; no full firmware build"
+	# Serial execution stops at the first failing prerequisite/package and keeps
+	# the complete first-attempt output for the diagnostic artifact.
+	( cd "$SOURCE_DIR" && make -j1 package/feeds/packages/libffi/compile V=s ) \
+		2>&1 | tee "$ROOT_DIR/build.log"
+}
+
 # ---------------------------------------------------------------------------
 # 6. collect
 # ---------------------------------------------------------------------------
@@ -255,6 +266,12 @@ main() {
 	apply_patches
 	make_config
 	bash "$ROOT_DIR/scripts/verify-config.sh" "$SOURCE_DIR"
+
+	if [ "$LIBFFI_ONLY" = true ]; then
+		run_libffi_only
+		log "libffi-only diagnostic complete; stopping before full firmware build"
+		exit 0
+	fi
 
 	if [ "$CONFIG_ONLY" = true ]; then
 		log "--config-only: stopping before the build"
