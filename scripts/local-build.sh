@@ -213,21 +213,19 @@ run_build() {
 }
 
 run_libffi_only() {
-	log "host-tool gate: build libdeflate, verify libdeflate-gzip, then compile Lua host"
-	# A direct package/<name>/compile target does not traverse the top-level
-	# tools phase. libdeflate is already a default tools-core tool in the pinned
-	# upstream tree; build it explicitly here rather than fabricating its output.
+	log "host-tools gate: build the official tools phase, then verify Meson/Lua/APK/libffi in dependency order"
+	# Package-only targets bypass tools/compile. The pinned source already
+	# registers Meson as a default host tool; run the standard tools phase so
+	# Meson's native/cross templates (and the other host tools) are staged before
+	# any package host configure target is entered. This preserves all outputs.
 	( cd "$SOURCE_DIR" && \
-		make tools/libdeflate/compile V=s && \
-		printf '%s\n' '--- libdeflate host build outputs ---' && \
-		find build_dir/host -maxdepth 4 \
-			\( -name libdeflate-gzip -o -name .built -o -name .installed \) -print && \
+		make tools/compile V=s && \
 		test -x staging_dir/host/bin/libdeflate-gzip && \
-		ls -l staging_dir/host/bin/libdeflate-gzip && \
-		make tools/sed/compile V=s && \
-		test -x staging_dir/host/bin/sed && \
+		test -s staging_dir/host/lib/meson/openwrt-native.txt.in && \
+		test -s staging_dir/host/lib/meson/openwrt-cross.txt.in && \
 		make package/utils/lua/host/compile V=s && \
-		log "Lua host compile passed; now clean only libffi and compile it" && \
+		make package/system/apk/host/compile V=s && \
+		log "host tools, Lua, and APK host configure passed; now clean only libffi" && \
 		make package/feeds/packages/libffi/clean V=s && \
 		make -j1 package/feeds/packages/libffi/compile V=s ) \
 		2>&1 | tee "$ROOT_DIR/build.log"
