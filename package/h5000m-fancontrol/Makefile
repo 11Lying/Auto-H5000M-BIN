@@ -17,6 +17,19 @@ define Package/h5000m-fancontrol/description
  Lightweight H5000M CPU/Wi-Fi temperature fan controller with hysteresis.
 endef
 
+# Script/data-only package: no source to build. Override the default
+# Build/* steps so OpenWrt does not try to run `make` in an empty build dir
+# (which fails with "No targets specified and no makefile found").
+define Build/Prepare
+	mkdir -p $(PKG_BUILD_DIR)
+endef
+
+define Build/Configure
+endef
+
+define Build/Compile
+endef
+
 define Package/h5000m-fancontrol/install
 	$(INSTALL_DIR) $(1)/usr/bin $(1)/etc/init.d $(1)/etc/config $(1)/etc/uci-defaults
 	$(INSTALL_BIN) ./files/usr/bin/fancontrol $(1)/usr/bin/fancontrol
