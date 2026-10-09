@@ -229,6 +229,9 @@ run_libffi_only() {
 	# any package host configure target is entered. This preserves all outputs.
 	# Package-only goals bypass the top-level target-toolchain phase. Stage
 	# libgcc_s explicitly so the libgcc IPK prerequisite is present.
+	# The staging_dir/host/llvm-bpf* assertions below are a cost guard: that
+	# toolchain costs ~64 min per run and nothing in this device selects
+	# NEED_BPF_TOOLCHAIN, so it must never appear.
 	( cd "$SOURCE_DIR" && \
 		make -j"$THREADS" tools/compile V=s && \
 		make -j"$THREADS" toolchain/compile V=s && \
@@ -237,8 +240,6 @@ run_libffi_only() {
 		test -x staging_dir/host/bin/libdeflate-gzip && \
 		test -s staging_dir/host/lib/meson/openwrt-native.txt.in && \
 		test -s staging_dir/host/lib/meson/openwrt-cross.txt.in && \
-		# Guard: the host LLVM/BPF toolchain costs ~64 min and must not be pulled
-		# in (no enabled package selects NEED_BPF_TOOLCHAIN).
 		test ! -e staging_dir/host/llvm-bpf && \
 		test -z "$(ls -d staging_dir/host/llvm-bpf-* 2>/dev/null || true)" && \
 		make -j"$THREADS" package/utils/lua/host/compile V=s && \
