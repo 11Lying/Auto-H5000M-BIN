@@ -238,9 +238,14 @@ run_libffi_only() {
 		log "host tools, target toolchain, Lua, and APK staged; now clean only libffi" && \
 		make package/feeds/packages/libffi/clean V=s && \
 		make -j1 package/feeds/packages/libffi/compile V=s && \
-		make -j1 package/feeds/packages/libffi/install V=s && \
-		for f in fficonfig.h ffi.h ffitarget.h; do test -n "$(find staging_dir -type f -name "$f" -print -quit)" || exit 1; done && \
-		test -n "$(find staging_dir -type f -name 'libffi.so*' -print -quit)" ) \
+		for f in fficonfig.h ffi.h ffitarget.h; do \
+			found=0; for h in staging_dir/target-*/usr/include/"$f"; do \
+				[ -s "$h" ] && { found=1; printf 'verified %s (%s bytes)\n' "$h" "$(wc -c < "$h")"; break; }; \
+			done; [ "$found" = 1 ] || { echo "missing/empty target header: $f" >&2; exit 1; }; \
+		done && \
+		found=0; for so in staging_dir/target-*/usr/lib/libffi.so*; do \
+			[ -s "$so" ] && { found=1; printf 'verified %s (%s bytes)\n' "$so" "$(wc -c < "$so")"; }; \
+		done; [ "$found" = 1 ] || { echo "missing/empty target libffi shared library" >&2; exit 1; } ) \
 		2>&1 | tee "$ROOT_DIR/build.log"
 }
 
