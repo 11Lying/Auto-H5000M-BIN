@@ -122,6 +122,21 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+sect "4b. build cost guards"
+# bridger is the only package that selects NEED_BPF_TOOLCHAIN on this target.
+# When it is selected the host LLVM/BPF toolchain is compiled from source
+# (~64 min per CI run, measured from the Actions log). Nothing we ship needs it.
+cfg_absent PACKAGE_bridger || fail "bridger selected: it forces the host LLVM/BPF toolchain build"
+cfg_absent NEED_BPF_TOOLCHAIN || fail "NEED_BPF_TOOLCHAIN set: host LLVM toolchain would be built"
+cfg_absent USE_LLVM_BUILD || fail "USE_LLVM_BUILD set: llvm-bpf would be built from source"
+cfg_has CCACHE || fail "ccache disabled: repeat CI runs would recompile everything"
+cfg_has DEVEL || fail "DEVEL not set: ccache prompt is not selectable without it"
+if cfg_absent PACKAGE_bridger && cfg_absent NEED_BPF_TOOLCHAIN && cfg_absent USE_LLVM_BUILD \
+   && cfg_has CCACHE && cfg_has DEVEL; then
+	pass "host LLVM/BPF toolchain not required and ccache enabled"
+fi
+
+# ---------------------------------------------------------------------------
 sect "5. top-level third-party functions"
 cfg_has PACKAGE_luci-app-openclash && pass "OpenClash selected" || fail "OpenClash not selected"
 if cfg_has PACKAGE_luci-app-qmodem-next; then

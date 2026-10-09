@@ -104,6 +104,10 @@ clone_source() {
 		die "v25.12.2 resolves to $head, expected $REPO_COMMIT"
 	fi
 
+	# Compiler cache directory, cached by CI as immortalwrt/.ccache. Created here
+	# (never in the workflow) so the clone step still sees an empty/missing path.
+	mkdir -p "$SOURCE_DIR/.ccache"
+
 	local kv
 	kv="$(sed -n 's/^LINUX_VERSION-6\.12 = //p' \
 		"$SOURCE_DIR/target/linux/generic/kernel-6.12" 2>/dev/null || true)"
@@ -233,6 +237,10 @@ run_libffi_only() {
 		test -x staging_dir/host/bin/libdeflate-gzip && \
 		test -s staging_dir/host/lib/meson/openwrt-native.txt.in && \
 		test -s staging_dir/host/lib/meson/openwrt-cross.txt.in && \
+		# Guard: the host LLVM/BPF toolchain costs ~64 min and must not be pulled
+		# in (no enabled package selects NEED_BPF_TOOLCHAIN).
+		test ! -e staging_dir/host/llvm-bpf && \
+		test -z "$(ls -d staging_dir/host/llvm-bpf-* 2>/dev/null || true)" && \
 		make -j"$THREADS" package/utils/lua/host/compile V=s && \
 		make -j"$THREADS" package/system/apk/host/compile V=s && \
 		log "host tools, target toolchain, Lua, and APK staged; now clean only libffi" && \

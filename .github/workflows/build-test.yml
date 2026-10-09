@@ -118,15 +118,15 @@ jobs:
       - name: Restore ccache
         uses: actions/cache@v4
         with:
-          path: .ccache
+          path: immortalwrt/.ccache
           key: ${{ runner.os }}-ccache-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-aarch64-gcc14-musl-k6.12-${{ env.DEVICE }}-${{ hashFiles('config/**', 'patches/**', 'feeds.conf.default') }}
           restore-keys: |
             ${{ runner.os }}-ccache-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-aarch64-gcc14-musl-k6.12-${{ env.DEVICE }}-
 
       - name: Build firmware
         env:
-          THREADS: ${{ inputs.threads || '2' }}
-          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          THREADS: ${{ inputs.threads || '8' }}
+          CCACHE_DIR: ${{ github.workspace }}/immortalwrt/.ccache
         run: |
           set -euxo pipefail
           export PATH="/usr/lib/ccache:$PATH"
@@ -196,6 +196,9 @@ jobs:
           grep -q '^CONFIG_PACKAGE_h5000m-fancontrol=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_kmod-mt7996e=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_kmod-mt76-core=y$' artifacts/build.config
+          grep -q '^CONFIG_CCACHE=y$' artifacts/build.config
+          ! grep -q '^CONFIG_NEED_BPF_TOOLCHAIN=y$' artifacts/build.config
+          [ ! -d immortalwrt/staging_dir/host/llvm-bpf ]
           grep -q '^CONFIG_NET_MEDIATEK_SOC_WED=y$' immortalwrt/target/linux/mediatek/filogic/config-6.12
           grep -q '^CONFIG_PACKAGE_kmod-mt7992-23-firmware=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_mt7987-2p5g-phy-firmware=y$' artifacts/build.config
@@ -219,4 +222,6 @@ jobs:
 
       - name: ccache statistics
         if: always()
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/immortalwrt/.ccache
         run: ccache -s || true
