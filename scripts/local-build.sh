@@ -22,10 +22,11 @@ umask 022
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-REPO_URL="${REPO_URL:-https://github.com/immortalwrt/immortalwrt}"
-REPO_REF="${REPO_REF:-v25.12.2}"
-# The commit the v25.12.2 tag points at. Asserted after cloning.
-REPO_COMMIT="${REPO_COMMIT:-4fc16f2985a358bd43bb522e43f05395fcbd6ed5}"
+REPO_URL="${REPO_URL:-https://github.com/chasey-dev/immortalwrt-mt798x-rebase}"
+REPO_REF="${REPO_REF:-25.12}"
+# Pinned commit on the 25.12 branch (2026-10-13). Has HNAT driver on 6.12
+# but H5000M defaults to open mt76 (no MT7992 in closed SDK).
+REPO_COMMIT="${REPO_COMMIT:-468e251661cb46face4ca0c961238282a6eaaa0a}"
 
 SOURCE_DIR="${SOURCE_DIR:-immortalwrt}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-artifacts}"
@@ -93,16 +94,10 @@ clone_source() {
 		$ok || die "could not clone $REPO_URL"
 	fi
 
-	# The clone must be the released stable tag, not a moving branch.
-	local describe
-	describe="$(git -C "$SOURCE_DIR" describe --tags --exact-match 2>/dev/null || true)"
-	[ "$describe" = "$REPO_REF" ] || die "expected tag $REPO_REF, got '${describe:-<none>}'"
-
+	# For branch-based sources (chasey-dev 25.12), verify the pinned commit.
 	local head
 	head="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
-	if [ "$REPO_REF" = "v25.12.2" ] && [ "$head" != "$REPO_COMMIT" ]; then
-		die "v25.12.2 resolves to $head, expected $REPO_COMMIT"
-	fi
+	[ "$head" = "$REPO_COMMIT" ] || die "expected commit $REPO_COMMIT, got $head"
 
 	# Compiler cache directory, cached by CI as immortalwrt/.ccache. Created here
 	# (never in the workflow) so the clone step still sees an empty/missing path.
@@ -163,6 +158,15 @@ apply_patches() {
 	cp -f "$ROOT_DIR/patches/970-pwm-fan-boot-duty.patch" "$dir/" \
 		|| die "could not stage kernel patch"
 	log "staged target/linux/mediatek/patches-6.12/970-pwm-fan-boot-duty.patch"
+	# Enable MTK HNAT hardware NAT driver (closed-source, in files-6.12).
+	# Cannot be set via seed .config (top-level Kconfig drops raw kernel
+	# symbols), so append directly to the target kernel config.
+	{
+		echo ""
+		echo "# H5000M: enable MediaTek HNAT hardware NAT acceleration"
+		echo "CONFIG_NET_MEDIATEK_HNAT=y"
+	} >> "$SOURCE_DIR/target/linux/mediatek/filogic/config-6.12"
+	log "enabled CONFIG_NET_MEDIATEK_HNAT in filogic config-6.12"
 	# Include the maintained userspace controller and read-only audit utility.
 	rm -rf "$SOURCE_DIR/package/h5000m-fancontrol"
 	cp -a "$ROOT_DIR/package/h5000m-fancontrol" "$SOURCE_DIR/package/h5000m-fancontrol"
