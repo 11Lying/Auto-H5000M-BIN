@@ -10,7 +10,9 @@ define Package/h5000m-fancontrol
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=Hiveton H5000M thermal fan controller
-  DEPENDS:=+uci +ubus +kmod-hwmon-pwmfan +kmod-thermal
+  DEPENDS:=+uci +ubus +kmod-thermal
+  # NOTE: pwm-fan is built into the kernel (CONFIG_SENSORS_PWM_FAN=y), not a
+  # module, so there is intentionally no +kmod-hwmon-pwmfan here.
 endef
 
 define Package/h5000m-fancontrol/description
