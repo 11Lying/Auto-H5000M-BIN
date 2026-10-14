@@ -1,0 +1,30 @@
+--- a/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
++++ b/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
+@@ -242,3 +242,23 @@
+ 	pinctrl-0 = <&uart0_pins>;
+ 	status = "okay";
+ };
++
++/* MTK HNAT hardware NAT acceleration node.
++ * MT7987's HNAT/PPE shares the NETSYS address space at 0x15100000
++ * (same as ethernet@15100000). This node is present in MTK's internal
++ * mt7987-netsys.dtsi but missing from all open-source trees, so we add
++ * it here for H5000M.
++ * compatible "mediatek,mtk-hnat" maps to hnat_data_v3 in the driver,
++ * suitable for MT7987 (Filogic 800).
++ */
++hnat: hnat@15100000 {
++	compatible = "mediatek,mtk-hnat";
++	reg = <0 0x15100000 0 0x80000>;
++	resets = <&ethsys 0>;
++	reset-names = "mtketh";
++	mtketh-wan = "eth1";
++	mtketh-lan = "lan";
++	mtketh-max-gmac = <2>;
++	mtketh-ppe-num = <2>;
++	/* USB (QMI wwan0) hardware acceleration whitelist.
++	 * 6.12 driver only supports exact match (no prefix matching).
++	 */
++	ext-devices = "wwan0";
++	status = "okay";
++};
