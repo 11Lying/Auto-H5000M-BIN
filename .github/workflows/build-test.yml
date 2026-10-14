@@ -52,7 +52,7 @@ jobs:
         run: |
           set -euxo pipefail
           bash -n scripts/local-build.sh scripts/verify-config.sh
-          test "$(find patches -maxdepth 1 -type f | wc -l)" -eq 3
+          test "$(find patches -maxdepth 1 -type f | wc -l)" -eq 4
           ! find . -path './.git' -prune -o -type f -print | grep -E 'h5000m-kit|mtwifi|Airpifanctrl|turboacc|chasey|padavanonly|openwrt-24\.10' || true
           grep -q 'immortalwrt/immortalwrt' README.md
           grep -q '4fc16f2985a358bd43bb522e43f05395fcbd6ed5' README.md
