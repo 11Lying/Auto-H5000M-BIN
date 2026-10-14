@@ -342,8 +342,19 @@ else
   fail "official MT7987 OPP table is incomplete"
 fi
 if grep -q 'cpu-supply' "$SRC/target/linux/mediatek/dts/mt7987.dtsi"; then fail "official SoC DTS unexpectedly declares cpu-supply"; else pass "official SoC DTS has no CPU voltage regulator"; fi
-if git -C "$SRC" diff --quiet -- target/linux/mediatek/dts/mt7987.dtsi target/linux/mediatek/filogic/config-6.12 target/linux/generic/config-6.12; then
-  pass "official CPUFreq/OPP kernel inputs are unmodified"
+if git -C "$SRC" diff --quiet -- target/linux/mediatek/dts/mt7987.dtsi target/linux/generic/config-6.12; then
+  # filogic config-6.12: only our intentional HNAT enablement is allowed.
+  # Any other diff (e.g. CPUFreq/OPP changes) is a failure.
+  hnat_diff="$(git -C "$SRC" diff -- target/linux/mediatek/filogic/config-6.12 || true)"
+  # Strip our known HNAT block; anything left is unexpected.
+  clean_diff="$(printf '%s\n' "$hnat_diff" | grep -vE '^\+# H5000M: enable MediaTek HNAT|^\+CONFIG_NET_MEDIATEK_HNAT=y|^\+$|^diff |^index |^--- |^\+\+\+ |^@@' || true)"
+  if [ -z "$clean_diff" ] && printf '%s\n' "$hnat_diff" | grep -q '^+CONFIG_NET_MEDIATEK_HNAT=y'; then
+    pass "official CPUFreq/OPP kernel inputs are unmodified (only intentional HNAT enablement)"
+  elif [ -z "$hnat_diff" ]; then
+    pass "official CPUFreq/OPP kernel inputs are unmodified"
+  else
+    fail "CPUFreq/OPP upstream kernel inputs were modified (unexpected diff in filogic config-6.12)"
+  fi
 else
   fail "CPUFreq/OPP upstream kernel inputs were modified"
 fi
