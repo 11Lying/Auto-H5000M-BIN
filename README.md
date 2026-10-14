@@ -1,90 +1,80 @@
-# Hiveton H5000M — ImmortalWrt 25.12.2 official stable
+# Hiveton H5000M — closed-driver performance build
 
-This repository builds a deliberately small, auditable Hiveton H5000M image from the **official ImmortalWrt v25.12.2 release tag**.
+This repository builds a performance-tuned Hiveton H5000M image on the
+**closed MediaTek driver stack**: `padavanonly/immortalwrt-mt798x-6.6`
+(`mt798x-mt799x-6.6-mtwifi` branch, kernel 6.6.94), pinned to an exact
+commit for reproducibility.
 
 ## Baseline
 
 | Item | Value |
 |---|---|
-| Source | `immortalwrt/immortalwrt` |
-| Release tag | `v25.12.2` |
-| Resolved source commit | `4fc16f2985a358bd43bb522e43f05395fcbd6ed5` |
+| Source | `padavanonly/immortalwrt-mt798x-6.6` |
+| Branch | `mt798x-mt799x-6.6-mtwifi` |
+| Pinned source commit | `30fbc1d6deba23c0e850185021e9ee42214925eb` |
 | Target | `mediatek/filogic` |
-| Device | `hiveton_h5000m` |
-| Kernel | official 6.12.103 source definition |
-| Wi-Fi | official upstream `mt76` (`kmod-mt7996e` + `kmod-mt7992-23-firmware`) |
-| OpenClash | official ImmortalWrt LuCI feed, 0.47.156 |
-| QModem | stable `v3.3.0`, commit `5cc80e5f9fc218cd50bef9749dc7d0027e8b3072` |
-
-The official v25.12.2 H5000M target already supplies the official DTS, board network/MAC logic, MT7987 PHY firmware, MT7992 firmware, USB3, PWM fan, image definition and partition/sysupgrade logic. This repository does **not** replace any of those.
+| Device | `hiveton-h5000m` (hyphenated name on this base) |
+| Kernel | 6.6.94 |
+| Wi-Fi | closed `mt_wifi7` (`kmod-mt_wifi7` + `mtwifi-cfg` + `luci-app-mtwifi-cfg`) |
+| NAT offload | `mediatek_hnat` (`kmod-mediatek_hnat`) + `mtk_wed`, via `luci-app-turboacc-mtk` |
+| QoS | `luci-app-eqos-mtk` (tc-based + `mtkhqos_util`) |
+| Congestion control | BBR (module + default) |
+| Proxy acceleration | `kmod-cryptodev` + `kmod-tls` (EIP-197) |
+| OpenClash | `vernesong/OpenClash` master |
+| QModem | `FUjr/QModem` main, `luci-app-qmodem-next` |
 
 ## What is selected
 
-Only these two top-level third-party functions are selected:
+On top of the base defconfig (`mt7987_mt7992.config`), `config/h5000m.config`
+adds:
 
-1. OpenClash
-2. `luci-app-qmodem-next`
+1. **Closed stack reaffirmed**: mt_wifi7, mediatek_hnat, mtk_wed, warp,
+   turboacc-mtk, mtwifi-cfg, eqos-mtk
+2. **Optimizations**: BBR as default congestion control, cryptodev + kTLS,
+   `KPROBES` (prerequisite for the USB/WWAN headroom fix, see below)
+3. **User packages**: `h5000m-fancontrol` (local PWM fan daemon),
+   OpenClash, `luci-app-qmodem-next` + QMI data path for the
+   user-swappable 5G module (Fibocom FM170 / Quectel / …)
 
-QModem's stable feed supplies the modem core, AT daemon, serial/QMI dependencies, Quectel vendor QMI WWAN driver and supporting tools. The legacy `luci-app-qmodem`, ModemManager and generic modem UI are not selected.
+Deliberately **not** selected (device profile defaults overridden):
+`luci-app-modem`, `quectel-CM-5G`, `sms-tool` (QModem owns the modem),
+`luci-app-Airpifanctrl` (single PWM writer rule: `h5000m-fancontrol`
+instead), open `mt76` Wi-Fi, SFE TurboACC.
 
-The stock H5000M image also retains the packages declared by the official device definition:
+## Patch audit
 
-- `kmod-hwmon-pwmfan`
-- `kmod-usb3`
-- `mt7987-2p5g-phy-firmware`
-- `kmod-mt7996e`
-- `kmod-mt7992-23-firmware`
-- filesystem/automount utilities declared upstream
+| Patch | Purpose | Status |
+|---|---|---|
+| `970-pwm-fan-boot-duty.patch` | `pwm-fan` driver: optional `pwm-fan,boot-duty` DTS property instead of 100% at probe | Ported to 6.6 (probe logic identical) |
+| `971-hwmon-pwmfan-boot-autoload.patch` | Load `pwm-fan` in the early module pass on mediatek targets | Kept |
+| `972-h5000m-fan-boot-duty.patch` | H5000M DTS: `pwm-fan,boot-duty = <89>` (~35%) | Kept |
+| `973-hnat-wwan-whitelist.patch` | hnat node: `ext-devices-prefix = "wwan"` so USB WWAN can be offloaded | New (whitepaper recipe) |
+| `mtk-hnat-local-dest.patch` | Never offload flows destined to the router itself (fixes LuCI access) | From upstream existyay |
+| `mtwifi-apcli-active-only.patch` | mtwifi APCLI active-only fix | From upstream existyay |
 
-The only custom network default is fw4 hardware/software flow offload enablement; WAN, IPv6, DNS, and OpenClash routing remain user-configured.
+## USB / WWAN hardware acceleration
 
-## Community patch audit
-
-| Patch / change | Origin and original purpose | v25.12.2 status | Decision |
-|---|---|---|---|
-| H5000M DTS replacement | Old vendor/community trees | Official DTS already exists and is used by the official device profile | **Not imported** |
-| `mtwifi-apcli-active-only.patch` | Old closed MediaTek mtwifi tree | No official mtwifi tree is used by v25.12.2 H5000M | **Forbidden / not imported** |
-| old mtwifi/mtwifi-cfg edits | Vendor Wi-Fi SDK integration | Not part of official 25.12.2 | **Forbidden / not imported** |
-| HNAT local-destination patch | Old vendor HNAT behaviour workaround | No evidence required for the official baseline | **Not imported** |
-| QMI WWAN 6.6 patch | Old kernel/vendor QMI tree | Official baseline is kernel 6.12; QModem stable supplies its own compatible vendor QMI package | **Not imported** |
-| MT7992 firmware/eeprom changes | Vendor Wi-Fi tree changes | Official target selects upstream mt76 and `kmod-mt7992-23-firmware`; official DTS binds `mediatek,mt76` | **Not imported** |
-| fan startup patch | Official 6.12 `pwm-fan` probes at 100% and has no boot-duty property | Not upstream; verified necessary for the requested startup-noise fix | **Minimal patch only** |
+The HNAT whitelist (973) lets `wwan0` flows enter the HNAT path. The
+`qmi_fix_skb.ko` headroom fix (KPROBES-based, from the H5000M HNAT whitepaper)
+is **not** in the 6.6 base tree and still needs to be ported; `KPROBES` is
+already enabled so the module can be dropped in without a kernel rebuild.
+Verify with `/sys/kernel/debug/hnat/hnat_stats`: a BIND entry with
+`bytes > 0` for the wwan path means true offload.
 
 ## Fan control and startup handover
 
-The official H5000M DTS remains the base. A narrowly-scoped board overlay adds `pwm-fan,boot-duty = <89>` (about 35% of 255) to prevent the upstream driver's 100% probe duty. The upstream `pwm-fan` driver gets the matching optional-property patch; the stock thermal cooling levels and critical trips are unchanged. A module autoload patch loads pwm-fan in the early module pass.
+Patches 970–972 are the same narrowly-scoped fan work as before: the
+`pwm-fan` driver no longer probes at 100% thanks to the `boot-duty`
+property, the module loads early, and the local `h5000m-fancontrol`
+package (init priority 15) applies the temperature curve. Stock thermal
+cooling levels and trip points are unchanged.
 
-The local `h5000m-fancontrol` package starts at init priority 15, after the early module loader. It applies the configured temperature curve, immediately raises PWM, delays/hysteresis-protects reductions, takes over the shared CPU thermal governor, and restores it on exit. The defaults use the existing H5000M curve, 5-second sampling, 3°C hysteresis, 5-second down-delay, Wi-Fi temperature with 5°C offset, and a 153/255 safe PWM only if both temperature sources fail at startup. Runtime boot timing and acoustic behavior still require a post-flash hardware check.
+## Reproducibility
 
-A read-only `/usr/bin/h5000m-audit` reports board, Wi-Fi, PPE/WED, flow-offload, modem, OpenClash and fan state. The first-boot defaults enable fw4 software and hardware flow offload; this configures the official PPE path but does not itself prove that PPE offload is active at runtime.
-
-## CPUFreq
-
-The official v25.12.2 MT7987 implementation is retained:
-
-- `CONFIG_ARM_MEDIATEK_CPUFREQ=y`
-- four upstream OPPs: 500 / 1300 / 1600 / 2000 MHz
-- `CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y`
-- maximum remains 2.0 GHz
-- no voltage patch, overclock, undervolt or fixed-frequency script
-- no `performance` governor forcing in this repository
-
-The expanded `.config` and the verification report are uploaded with every build.
-
-## Build locally
-
-```sh
-scripts/local-build.sh --config-only
-scripts/local-build.sh
-```
-
-The script refuses to proceed unless the exact release tag/commit, pinned official feeds, official H5000M profile, mt76 stack and the allowed patch set pass `scripts/verify-config.sh`.
-
-## GitHub Actions
-
-- Pushes run the static/config validation job.
-- `workflow_dispatch` with `confirm_firmware_build=true` runs the official baseline firmware build.
-- The build artifact contains images, expanded `.config`, manifest, source/feed/plugin provenance and SHA256 sums.
-- Cache keys include source commit, target, config hash and patch-set hash. Old padavanonly/chasey source/object caches are not reused.
-
-The vendor/closed-source Wi-Fi branch is intentionally **not built**. It would require a separate non-official kernel/driver integration and is excluded from the stable baseline.
+The base moves as a branch upstream; this build pins it to
+`30fbc1d6deba23c0e850185021e9ee42214925eb` and asserts the checkout.
+Feeds track the branches the base was tested against
+(`openwrt-24.10` + nikki + qmodem). `scripts/verify-config.sh` audits
+source identity, the closed stack, the optimizations and the patch
+inventory before every compile, and the workflow reverse-audits the
+final image.
