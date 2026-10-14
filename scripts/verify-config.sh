@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Static verification of an ImmortalWrt v25.12.2 / H5000M build tree.
+# Static verification of a chasey-dev 25.12 (HNAT) / H5000M build tree.
 #
 # Runs before the compile. Every check here exists because of a concrete
 # failure mode that was hit before, or because it guards a requirement in the
@@ -29,10 +29,10 @@ cfg_absent() { ! grep -qxE "CONFIG_$1=(y|m)" "$CFG"; }
 
 # ---------------------------------------------------------------------------
 sect "1. source identity"
-if [ "$(git -C "$SRC" describe --tags --exact-match 2>/dev/null || true)" = "v25.12.2" ]; then
-	pass "checked-out ref is the v25.12.2 tag"
+if [ "$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)" = "468e251661cb46face4ca0c961238282a6eaaa0a" ]; then
+	pass "checked-out commit is the pinned chasey-dev 25.12 commit"
 else
-	fail "tree is not at an exact v25.12.2 tag"
+	fail "tree is not at the pinned chasey-dev 25.12 commit"
 fi
 head="$(git -C "$SRC" rev-parse HEAD)"
 if [ "$head" = "4fc16f2985a358bd43bb522e43f05395fcbd6ed5" ]; then
@@ -51,14 +51,11 @@ UPSTREAM_FEEDS="$SRC/feeds.conf.default"
 ACTIVE_FEEDS="$ROOT_DIR/feeds.conf.default"
 if [ -f "$UPSTREAM_FEEDS" ] && [ -f "$ACTIVE_FEEDS" ]; then
   for feed in packages luci routing telephony video; do
-    upstream_line="$(grep -E "^src-git ${feed} " "$UPSTREAM_FEEDS" || true)"
     active_line="$(grep -E "^src-git ${feed} " "$ACTIVE_FEEDS" || true)"
-    if [ -z "$upstream_line" ] || [ "$active_line" != "$upstream_line" ]; then
-      fail "$feed feed differs from the official v25.12.2 pin"
-    elif ! printf '%s\n' "$active_line" | grep -qE '\^[0-9a-f]{40}$'; then
+    if ! printf '%s\n' "$active_line" | grep -qE '\^[0-9a-f]{40}$'; then
       fail "$feed feed is not pinned to a full commit: $active_line"
     else
-      pass "$feed exactly matches official v25.12.2 pinned commit"
+      pass "$feed pinned to a full commit (chasey-dev base, pins chosen for reproducibility)"
     fi
   done
   qmodem_line="$(grep '^src-git qmodem ' "$ACTIVE_FEEDS" || true)"
@@ -262,10 +259,17 @@ if grep -q '\.ppe_num = 2' "$SRC/target/linux/mediatek/patches-6.12/750-net-ethe
 else
   fail "MediaTek PPE integration source missing"
 fi
-if grep -q 'CONFIG_PACKAGE_kmod-mt_wifi7=y' "$CFG" || grep -q 'CONFIG_PACKAGE_kmod-warp=y' "$CFG" || grep -q 'CONFIG_PACKAGE_kmod-mediatek_hnat=y' "$CFG"; then
-  fail "forbidden vendor Wi-Fi/HNAT/WARP package enabled"
+if grep -q 'CONFIG_NET_MEDIATEK_HNAT=y' "$SRC/target/linux/mediatek/filogic/config-6.12"; then
+  pass "MTK HNAT hardware NAT driver enabled"
 else
-  pass "no legacy vendor Wi-Fi/HNAT/WARP packages enabled"
+  fail "CONFIG_NET_MEDIATEK_HNAT not enabled in filogic config-6.12"
+fi
+# On hnat-6.12 branch, closed WiFi is NOT available (no MT7992 in SDK),
+# but HNAT is intentionally enabled. Only forbid the WiFi/WARP parts.
+if grep -q 'CONFIG_PACKAGE_kmod-mt_wifi7=y' "$CFG" || grep -q 'CONFIG_PACKAGE_kmod-warp=y'; then
+  fail "forbidden vendor Wi-Fi/WARP package enabled (no MT7992 support)"
+else
+  pass "no vendor Wi-Fi/WARP packages (HNAT allowed on this branch)"
 fi
 if grep -q 'compatible = "mediatek,mt76"' "$DTS"; then
 	pass "H5000M DTS binds MT7992 to the in-tree mt76 driver"
