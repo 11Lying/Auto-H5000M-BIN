@@ -1,0 +1,12 @@
+--- a/target/linux/mediatek/files-6.6/arch/arm64/boot/dts/mediatek/mt7987-netsys.dtsi
++++ b/target/linux/mediatek/files-6.6/arch/arm64/boot/dts/mediatek/mt7987-netsys.dtsi
+@@ -116,6 +116,8 @@
+ 	hnat: hnat@15000000 {
+ 		compatible = "mediatek,mtk-hnat_v5";
+ 		reg = <0 0x15100000 0 0x80000>;
++		/* Whitelist USB WWAN interfaces (wwan0, ...) as HNAT-capable
++		 * external devices so the 5G module path can be offloaded. */
++		ext-devices-prefix = "wwan";
+ 		interrupts = <GIC_SPI 198 IRQ_TYPE_LEVEL_HIGH>;
+ 		resets = <&ethsys 0>;
+ 		reset-names = "mtketh";
