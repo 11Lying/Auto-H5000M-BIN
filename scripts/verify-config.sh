@@ -313,9 +313,10 @@ fi
 grep -qx 'CONFIG_SENSORS_PWM_FAN=y' "$CFG" \
 	&& pass "pwm-fan built into the kernel" \
 	|| fail "CONFIG_SENSORS_PWM_FAN is not =y"
-cfg_absent PACKAGE_kmod-hwmon-pwmfan \
-	&& pass "kmod-hwmon-pwmfan not selected (built-in)" \
-	|| fail "kmod-hwmon-pwmfan selected despite built-in driver"
+# NOTE: kmod-hwmon-pwmfan is forced =y by the official H5000M
+# DEVICE_PACKAGES and cannot be deselected from the seed. Harmless: with the
+# driver built in, the kmod package builds empty. h5000m-fancontrol no longer
+# depends on it (see its Makefile).
 
 # ---------------------------------------------------------------------------
 sect "12b. performance optimizations"
