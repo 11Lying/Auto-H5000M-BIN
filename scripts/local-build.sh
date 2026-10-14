@@ -168,10 +168,8 @@ apply_patches() {
 	cp -a "$ROOT_DIR/package/h5000m-fancontrol" "$SOURCE_DIR/package/h5000m-fancontrol"
 	log "staged H5000M fan-control package"
 
-	# 972 is the board DTS overlay (boot-duty). 971 (module autoload) was
-	# retired: pwm-fan is now built into the kernel, there is no module
-	# left to autoload.
-	for p in 972-h5000m-fan-boot-duty.patch; do
+	# 970 (kernel driver) + 971 (early autoload) + 972 (board DTS overlay).
+	for p in 971-hwmon-pwmfan-boot-autoload.patch 972-h5000m-fan-boot-duty.patch; do
 		[ -f "$ROOT_DIR/patches/$p" ] || die "missing patch $p"
 		if patch -d "$SOURCE_DIR" -p1 --forward --silent < "$ROOT_DIR/patches/$p"; then
 			log "applied $p"
@@ -294,7 +292,7 @@ collect() {
 		echo "target=mediatek/filogic"
 		echo "kernel=$(sed -n 's/^LINUX_VERSION-6\.12 = //p' "$SOURCE_DIR/target/linux/generic/kernel-6.12")"
 		echo "wifi_stack=official mt76 (kmod-mt7996e + kmod-mt7992-23-firmware)"
-		echo "fan_patches=970+972 applied, pwm-fan built-in (=y); upstream thermal trips retained"
+		echo "fan_patches=970+971+972 applied; upstream thermal trips retained"
 		echo "--- feeds ---"
 		grep '^src-git' "$SOURCE_DIR/feeds.conf.default"
 		echo "--- openclash ---"
