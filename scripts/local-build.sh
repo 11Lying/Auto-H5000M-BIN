@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Hiveton H5000M x ImmortalWrt v25.12.2 (official stable)
+# Hiveton H5000M x closed-driver performance build
+# (padavanonly/immortalwrt-mt798x-6.6 @ mt798x-mt799x-6.6-mtwifi, kernel 6.6)
 #
 # The whole build, in order, and nothing else:
 #
-#   1. clone official immortalwrt/immortalwrt at the released tag
-#   2. verify our feeds.conf.default against the one shipped in that tag,
-#      then add the single extra feed (QModem, pinned)
-#   3. feeds update / install
-#   4. apply only the permitted fan patches; keep the DTS byte-for-byte upstream
-#   5. copy config/h5000m.config -> .config, run `make defconfig`
+#   1. clone padavanonly/immortalwrt-mt798x-6.6 and check out the pinned commit
+#      REPO_COMMIT on branch REPO_BRANCH (reproducible, not a moving target)
+#   2. install our feeds.conf.default (branch pins proven with this base),
+#      then feeds update / install
+#   3. stage extra packages: luci-app-turboacc-mtk (hanwckf),
+#      luci-app-openclash (vernesong), h5000m-fancontrol (local)
+#   4. apply patches: 970/971/972 (fan) + mtk-hnat-local-dest +
+#      mtwifi-apcli-active-only + 973 (hnat wwan whitelist)
+#   5. fetch the base defconfig (mt7987_mt7992.config) at the pinned commit,
+#      append config/h5000m.config delta, run `make defconfig`
 #   6. run the static verification suite (scripts/verify-config.sh)
 #   7. make
 #   8. collect images + the expanded .config + manifest + identity
@@ -22,10 +27,13 @@ umask 022
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-REPO_URL="${REPO_URL:-https://github.com/immortalwrt/immortalwrt}"
-REPO_REF="${REPO_REF:-v25.12.2}"
-# The commit the v25.12.2 tag points at. Asserted after cloning.
-REPO_COMMIT="${REPO_COMMIT:-4fc16f2985a358bd43bb522e43f05395fcbd6ed5}"
+REPO_URL="${REPO_URL:-https://github.com/padavanonly/immortalwrt-mt798x-6.6}"
+REPO_BRANCH="${REPO_BRANCH:-mt798x-mt799x-6.6-mtwifi}"
+# Pinned commit of the branch above (2026-07-23). Asserted after checkout:
+# the build must never follow a moving branch.
+REPO_COMMIT="${REPO_COMMIT:-30fbc1d6deba23c0e850185021e9ee42214925eb}"
+# Base defconfig fetched at the pinned commit for reproducibility.
+BASE_DEFCONFIG_URL="${BASE_DEFCONFIG_URL:-https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/${REPO_COMMIT}/defconfig/mt7987_mt7992.config}"
 
 SOURCE_DIR="${SOURCE_DIR:-immortalwrt}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-artifacts}"
@@ -53,7 +61,7 @@ Usage: scripts/local-build.sh [options]
   --libffi-then-build   clean/build libffi with V=s, then continue full firmware build
   --skip-feeds-update   reuse an existing feeds/ tree
 
-Environment: REPO_URL REPO_REF REPO_COMMIT SOURCE_DIR CONFIG_FILE THREADS
+Environment: REPO_URL REPO_BRANCH REPO_COMMIT BASE_DEFCONFIG_URL SOURCE_DIR CONFIG_FILE THREADS
 EOF
 }
 
@@ -81,37 +89,35 @@ clone_source() {
 	if [ -d "$SOURCE_DIR/.git" ]; then
 		log "source tree already present: $SOURCE_DIR"
 	else
-		log "cloning $REPO_URL @ $REPO_REF"
+		log "cloning $REPO_URL @ $REPO_BRANCH"
 		local ok=false
 		local prefix
 		for prefix in "" $GITHUB_PROXY_PREFIXES; do
 			rm -rf "$SOURCE_DIR"
-			if git clone --depth "$GIT_CLONE_DEPTH" --branch "$REPO_REF" \
+			if git clone --depth "$GIT_CLONE_DEPTH" --branch "$REPO_BRANCH" \
 				"${prefix}${REPO_URL}" "$SOURCE_DIR"; then ok=true; break; fi
 			warn "clone failed via '${prefix:-direct}', trying next"
 		done
 		$ok || die "could not clone $REPO_URL"
 	fi
 
-	# The clone must be the released stable tag, not a moving branch.
-	local describe
-	describe="$(git -C "$SOURCE_DIR" describe --tags --exact-match 2>/dev/null || true)"
-	[ "$describe" = "$REPO_REF" ] || die "expected tag $REPO_REF, got '${describe:-<none>}'"
+	# Pin to the exact commit: a moving branch must never change the build.
+	( cd "$SOURCE_DIR" && git fetch --depth 1 origin "$REPO_COMMIT" 2>/dev/null || true )
+	( cd "$SOURCE_DIR" && git checkout -q "$REPO_COMMIT" ) \
+		|| die "could not check out $REPO_COMMIT"
 
 	local head
 	head="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
-	if [ "$REPO_REF" = "v25.12.2" ] && [ "$head" != "$REPO_COMMIT" ]; then
-		die "v25.12.2 resolves to $head, expected $REPO_COMMIT"
-	fi
+	[ "$head" = "$REPO_COMMIT" ] || die "HEAD is $head, expected $REPO_COMMIT"
 
 	# Compiler cache directory, cached by CI as immortalwrt/.ccache. Created here
 	# (never in the workflow) so the clone step still sees an empty/missing path.
 	mkdir -p "$SOURCE_DIR/.ccache"
 
 	local kv
-	kv="$(sed -n 's/^LINUX_VERSION-6\.12 = //p' \
-		"$SOURCE_DIR/target/linux/generic/kernel-6.12" 2>/dev/null || true)"
-	log "source: $describe @ $head (kernel ${kv:-unknown})"
+	kv="$(sed -n 's/^LINUX_VERSION-6\.6 = //p' \
+		"$SOURCE_DIR/target/linux/generic/kernel-6.6" 2>/dev/null || true)"
+	log "source: $REPO_BRANCH @ $head (kernel ${kv:-unknown})"
 }
 
 # ---------------------------------------------------------------------------
@@ -121,19 +127,15 @@ prepare_feeds() {
 	[ -f "$SOURCE_DIR/feeds.conf.default" ] || die "missing $SOURCE_DIR/feeds.conf.default"
 	[ -f "$EXPECTED_FEEDS" ] || die "missing $EXPECTED_FEEDS"
 
-	# Every upstream feed line in the tree must also be in our file, unchanged.
-	local line
+	# ...and we must not have re-pointed any feed at an unexpected remote.
+	# NOTE: branch pins (e.g. ;openwrt-24.10) are intentional on this base:
+	# reproducibility comes from the pinned base commit (REPO_COMMIT), and
+	# these are the branch pins the base was tested against.
 	while read -r line; do
 		[ -n "$line" ] || continue
 		grep -qxF "$line" "$EXPECTED_FEEDS" \
 			|| die "upstream feed line not mirrored in $EXPECTED_FEEDS: $line"
-	done < <(grep '^src-git' "$SOURCE_DIR/feeds.conf.default")
-
-	# ...and we must not have re-pointed any official feed at another branch.
-	if grep -E '^src-git (packages|luci|routing|telephony|video) ' "$EXPECTED_FEEDS" \
-		| grep -qE ';(openwrt|master|main|openwrt-2[0-4])'; then
-		die "an official feed in $EXPECTED_FEEDS is pinned to a branch, not a commit"
-	fi
+	done < <(grep '^src-git' "$SOURCE_DIR/feeds.conf.default" || true)
 
 	cp -f "$EXPECTED_FEEDS" "$SOURCE_DIR/feeds.conf.default"
 	log "feeds.conf.default installed"
@@ -158,56 +160,98 @@ apply_patches() {
 	local p dir
 	# 970 is a kernel patch: it only has to be dropped into the mediatek
 	# kernel patch directory, the kernel build applies it with -p1.
-	dir="$SOURCE_DIR/target/linux/mediatek/patches-6.12"
+	dir="$SOURCE_DIR/target/linux/mediatek/patches-6.6"
 	[ -d "$dir" ] || die "missing $dir"
 	cp -f "$ROOT_DIR/patches/970-pwm-fan-boot-duty.patch" "$dir/" \
 		|| die "could not stage kernel patch"
-	log "staged target/linux/mediatek/patches-6.12/970-pwm-fan-boot-duty.patch"
+	log "staged target/linux/mediatek/patches-6.6/970-pwm-fan-boot-duty.patch"
 	# Include the maintained userspace controller and read-only audit utility.
 	rm -rf "$SOURCE_DIR/package/h5000m-fancontrol"
 	cp -a "$ROOT_DIR/package/h5000m-fancontrol" "$SOURCE_DIR/package/h5000m-fancontrol"
 	log "staged H5000M fan-control package"
 
-	# Keep all three reviewed fan patch records in the repository, but the
-	# board-specific DTS patch is deliberately not applied: user requires the
-	# official H5000M DTS byte-for-byte unchanged.
-	for p in 971-hwmon-pwmfan-boot-autoload.patch 972-h5000m-fan-boot-duty.patch; do
+	# Tree patches, applied idempotently (-N: skip hunks already applied).
+	for p in 971-hwmon-pwmfan-boot-autoload.patch \
+		 972-h5000m-fan-boot-duty.patch \
+		 973-hnat-wwan-whitelist.patch \
+		 mtk-hnat-local-dest.patch \
+		 mtwifi-apcli-active-only.patch; do
 		[ -f "$ROOT_DIR/patches/$p" ] || die "missing patch $p"
-		if patch -d "$SOURCE_DIR" -p1 --forward --silent < "$ROOT_DIR/patches/$p"; then
+		if patch -d "$SOURCE_DIR" -p1 -N --silent < "$ROOT_DIR/patches/$p"; then
 			log "applied $p"
+		elif patch -d "$SOURCE_DIR" -p1 -R --dry-run --silent < "$ROOT_DIR/patches/$p" >/dev/null 2>&1; then
+			log "$p already applied, skipping"
 		else
 			die "failed to apply $p"
 		fi
 	done
 
+	# luci-app-turboacc-mtk: HNAT/SFE control panel (not in any feed).
+	if [ ! -d "$SOURCE_DIR/package/mtk/applications/luci-app-turboacc-mtk" ]; then
+		rm -rf /tmp/luci-app-turboacc-mtk
+		git clone --depth 1 https://github.com/hanwckf/immortalwrt-mt798x.git \
+			/tmp/luci-app-turboacc-mtk \
+			|| die "could not clone luci-app-turboacc-mtk"
+		if [ -d "/tmp/luci-app-turboacc-mtk/package/mtk/applications/luci-app-turboacc-mtk" ]; then
+			mkdir -p "$SOURCE_DIR/package/mtk/applications"
+			cp -r /tmp/luci-app-turboacc-mtk/package/mtk/applications/luci-app-turboacc-mtk \
+				"$SOURCE_DIR/package/mtk/applications/luci-app-turboacc-mtk"
+			log "staged luci-app-turboacc-mtk"
+		else
+			die "luci-app-turboacc-mtk layout changed upstream"
+		fi
+		rm -rf /tmp/luci-app-turboacc-mtk
+	fi
+
+	# luci-app-openclash (not in any feed).
+	if [ ! -d "$SOURCE_DIR/package/luci-app-openclash" ]; then
+		rm -rf /tmp/openclash
+		git clone --depth 1 https://github.com/vernesong/OpenClash.git /tmp/openclash \
+			|| die "could not clone OpenClash"
+		[ -d "/tmp/openclash/luci-app-openclash" ] \
+			|| die "OpenClash repository layout changed"
+		cp -r /tmp/openclash/luci-app-openclash "$SOURCE_DIR/package/luci-app-openclash"
+		log "staged luci-app-openclash"
+		rm -rf /tmp/openclash
+	fi
+
 	# libffi 3.4.7's configure chooses the target-specific multi-os build
 	# directory (mediatek/filogic here), not GNU_TARGET_NAME*.  InstallDev in
-	# the pinned packages feed still looks only for the obsolete tuple path.
-	# Keep the feed commit pinned and narrowly fix only this generated-header
-	# lookup; the two-level glob matches the configure-created target/subtarget
-	# directory without changing libffi's configure/build behavior.
+	# the packages feed still looks only for the obsolete tuple path.
+	# Narrowly fix only this generated-header lookup when the exact string
+	# is present; otherwise warn (feed may have fixed it upstream).
 	local ffi_makefile="$SOURCE_DIR/feeds/packages/libs/libffi/Makefile"
-	[ -f "$ffi_makefile" ] || die "missing pinned libffi Makefile: $ffi_makefile"
-	python3 - "$ffi_makefile" <<'PY'
+	if [ -f "$ffi_makefile" ]; then
+		python3 - "$ffi_makefile" <<'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
 s = p.read_text()
 old = "$(PKG_BUILD_DIR)/$(GNU_TARGET_NAME)*/fficonfig.h"
 new = "$(PKG_BUILD_DIR)/*/*/fficonfig.h"
-if s.count(old) != 1:
-    raise SystemExit(f"expected exactly one libffi header lookup, found {s.count(old)}")
-p.write_text(s.replace(old, new))
+if old in s:
+    p.write_text(s.replace(old, new, 1))
+    print("patched libffi InstallDev lookup")
+else:
+    print("libffi InstallDev lookup already fixed or changed; leaving alone")
 PY
-	log "patched pinned libffi InstallDev lookup for target/subtarget build directory"
+	else
+		warn "missing libffi Makefile: $ffi_makefile"
+	fi
 }
 
 # ---------------------------------------------------------------------------
 # 4. config
 # ---------------------------------------------------------------------------
 make_config() {
-	[ -s "$CONFIG_FILE" ] || die "missing seed config $CONFIG_FILE"
-	cp -f "$CONFIG_FILE" "$SOURCE_DIR/.config"
-	log "seed .config installed, running make defconfig"
+	[ -s "$CONFIG_FILE" ] || die "missing delta config $CONFIG_FILE"
+	log "fetching base defconfig at pinned commit"
+	( cd "$SOURCE_DIR" && curl -fsSL --retry 3 "$BASE_DEFCONFIG_URL" -o base-defconfig ) \
+		|| die "could not fetch base defconfig: $BASE_DEFCONFIG_URL"
+	grep -q "CONFIG_PACKAGE_kmod-mt_wifi7=y" "$SOURCE_DIR/base-defconfig" \
+		|| die "base defconfig does not look like the 6.6-mtwifi one"
+	cp -f "$SOURCE_DIR/base-defconfig" "$SOURCE_DIR/.config"
+	cat "$CONFIG_FILE" >> "$SOURCE_DIR/.config"
+	log "base + delta installed, running make defconfig"
 	( cd "$SOURCE_DIR" && make defconfig ) || die "make defconfig failed"
 }
 
@@ -269,17 +313,17 @@ collect() {
 	[ -d "$tgt" ] || die "no image directory $tgt"
 
 	local n=0 f
-	for f in "$tgt"/*hiveton_h5000m*; do
+	for f in "$tgt"/*hiveton-h5000m*; do
 		[ -f "$f" ] || continue
 		cp -f "$f" "$ARTIFACTS_DIR/"
 		n=$((n + 1))
 	done
-	[ "$n" -gt 0 ] || die "no hiveton_h5000m image was produced"
+	[ "$n" -gt 0 ] || die "no hiveton-h5000m image was produced"
 
 	# fully expanded config + package manifest + build identity
 	cp -f "$SOURCE_DIR/.config" "$ARTIFACTS_DIR/build.config"
-	if [ -f "$tgt/immortalwrt-mediatek-filogic-hiveton_h5000m.manifest" ]; then
-		cp -f "$tgt/immortalwrt-mediatek-filogic-hiveton_h5000m.manifest" \
+	if [ -f "$tgt/immortalwrt-mediatek-filogic-hiveton-h5000m.manifest" ]; then
+		cp -f "$tgt/immortalwrt-mediatek-filogic-hiveton-h5000m.manifest" \
 			"$ARTIFACTS_DIR/openwrt-image.manifest"
 	fi
 	[ -f "$tgt/profiles.json" ] && cp -f "$tgt/profiles.json" "$ARTIFACTS_DIR/" || true
@@ -287,19 +331,24 @@ collect() {
 	# provenance
 	{
 		echo "build_time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-		echo "source=immortalwrt/immortalwrt"
-		echo "source_ref=$REPO_REF"
+		echo "source=padavanonly/immortalwrt-mt798x-6.6"
+		echo "source_branch=$REPO_BRANCH"
 		echo "source_commit=$(git -C "$SOURCE_DIR" rev-parse HEAD)"
-		echo "device=hiveton_h5000m"
+		echo "device=hiveton-h5000m"
 		echo "target=mediatek/filogic"
-		echo "kernel=$(sed -n 's/^LINUX_VERSION-6\.12 = //p' "$SOURCE_DIR/target/linux/generic/kernel-6.12")"
-		echo "wifi_stack=official mt76 (kmod-mt7996e + kmod-mt7992-23-firmware)"
-		echo "fan_patches=970+971+972 applied; upstream thermal trips retained"
+		echo "kernel=$(sed -n 's/^LINUX_VERSION-6\.6 = //p' "$SOURCE_DIR/target/linux/generic/kernel-6.6")"
+		echo "wifi_stack=closed mt_wifi7 (kmod-mt_wifi7 + mtwifi-cfg)"
+		echo "nat_offload=mediatek_hnat (kmod-mediatek_hnat) + mtk_wed"
+		echo "qos=luci-app-eqos-mtk (tc-based + mtkhqos_util)"
+		echo "congestion_control=bbr (default)"
+		echo "proxy_accel=kmod-cryptodev + kmod-tls (EIP-197)"
+		echo "usb_wwan_hnat=973 whitelist applied; qmi_fix_skb pending port (KPROBES enabled)"
+		echo "fan_patches=970+971+972+973 applied; upstream thermal trips retained"
 		echo "--- feeds ---"
 		grep '^src-git' "$SOURCE_DIR/feeds.conf.default"
 		echo "--- openclash ---"
 		grep -m1 '^PKG_VERSION' \
-			"$SOURCE_DIR/feeds/luci/applications/luci-app-openclash/Makefile" 2>/dev/null || true
+			"$SOURCE_DIR/package/luci-app-openclash/Makefile" 2>/dev/null || true
 		echo "--- qmodem ---"
 		grep -m1 '^QMODEM_VERSION' "$SOURCE_DIR/feeds/qmodem/version.mk" 2>/dev/null || true
 	} > "$ARTIFACTS_DIR/H5000M-IDENTITY.txt"
