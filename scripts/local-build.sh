@@ -175,7 +175,7 @@ apply_patches() {
 	log "staged H5000M fan-control package"
 
 	# 970 (kernel driver) + 971 (early autoload) + 972 (board DTS overlay).
-	for p in 971-hwmon-pwmfan-boot-autoload.patch 972-h5000m-fan-boot-duty.patch; do
+	for p in 971-hwmon-pwmfan-boot-autoload.patch 972-h5000m-fan-boot-duty.patch 973-h5000m-hnat-node.patch; do
 		[ -f "$ROOT_DIR/patches/$p" ] || die "missing patch $p"
 		if patch -d "$SOURCE_DIR" -p1 --forward --silent < "$ROOT_DIR/patches/$p"; then
 			log "applied $p"
