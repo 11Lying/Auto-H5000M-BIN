@@ -167,8 +167,11 @@ apply_patches() {
 		echo ""
 		echo "# H5000M: enable MediaTek HNAT hardware NAT acceleration"
 		echo "CONFIG_NET_MEDIATEK_HNAT=y"
+		echo ""
+		echo "# H5000M: enable IPv6 (required for IPv6 HNAT acceleration)"
+		echo "CONFIG_IPV6=y"
 	} >> "$SOURCE_DIR/target/linux/mediatek/filogic/config-6.12"
-	log "enabled CONFIG_NET_MEDIATEK_HNAT in filogic config-6.12"
+	log "enabled CONFIG_NET_MEDIATEK_HNAT + CONFIG_IPV6 in filogic config-6.12"
 	# Include the maintained userspace controller and read-only audit utility.
 	rm -rf "$SOURCE_DIR/package/h5000m-fancontrol"
 	cp -a "$ROOT_DIR/package/h5000m-fancontrol" "$SOURCE_DIR/package/h5000m-fancontrol"
