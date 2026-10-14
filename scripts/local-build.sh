@@ -106,7 +106,7 @@ clone_source() {
 	local kv
 	kv="$(sed -n 's/^LINUX_VERSION-6\.12 = //p' \
 		"$SOURCE_DIR/target/linux/generic/kernel-6.12" 2>/dev/null || true)"
-	log "source: $describe @ $head (kernel ${kv:-unknown})"
+	log "source: $REPO_REF @ $head (kernel ${kv:-unknown})"
 }
 
 # ---------------------------------------------------------------------------
