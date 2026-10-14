@@ -174,9 +174,9 @@ if [ -d "$SRC/package/mtk" ]; then
 else
 	pass "no MTK vendor feed present"
 fi
-extra="$(ls "$ROOT_DIR/patches" 2>/dev/null | grep -vE '^(970|972)-' || true)"
+extra="$(ls "$ROOT_DIR/patches" 2>/dev/null | grep -vE '^(970|971|972)-' || true)"
 if [ -z "$extra" ]; then
-	pass "patches/ contains only the two documented fan patches (970, 972)"
+	pass "patches/ contains only the three documented fan patches (970, 971, 972)"
 else
 	fail "unexpected patch files: $(echo "$extra" | tr '\n' ' ')"
 fi
@@ -308,22 +308,20 @@ if grep -rqE '(\[fan\]|fan-no-percent|disable-thermal)' "$ROOT_DIR/patches" 2>/d
 else
 	pass "no patch disables thermal handling"
 fi
-# pwm-fan must be built into the kernel (no module): the fan runs at full
-# speed until the driver probes, so built-in shortens the full-speed window.
-grep -qx 'CONFIG_SENSORS_PWM_FAN=y' "$CFG" \
-	&& pass "pwm-fan built into the kernel" \
-	|| fail "CONFIG_SENSORS_PWM_FAN is not =y"
-# NOTE: kmod-hwmon-pwmfan is forced =y by the official H5000M
-# DEVICE_PACKAGES and cannot be deselected from the seed. Harmless: with the
-# driver built in, the kmod package builds empty. h5000m-fancontrol no longer
-# depends on it (see its Makefile).
+# pwm-fan stays a module with early autoload (971); the 970+972 boot-duty
+# patches keep the probe duty at ~35% instead of 100%.
+cfg_has PACKAGE_kmod-hwmon-pwmfan \
+	&& pass "kmod-hwmon-pwmfan selected (module + 971 autoload)" \
+	|| fail "kmod-hwmon-pwmfan not selected"
 
 # ---------------------------------------------------------------------------
 sect "12b. performance optimizations"
 cfg_has PACKAGE_kmod-tcp-bbr && pass "BBR module selected" || fail "kmod-tcp-bbr missing"
-grep -qx 'CONFIG_DEFAULT_TCP_CONG="bbr"' "$CFG" \
-	&& pass "BBR is the default congestion control" \
-	|| fail "default congestion control is not bbr"
+# BBR default is applied at first boot via uci-defaults (91-h5000m-bbr),
+# not via kernel config (top-level Kconfig drops raw kernel symbols).
+grep -q 'tcp_congestion_control=bbr' "$ROOT_DIR/package/h5000m-fancontrol/files/etc/uci-defaults/91-h5000m-bbr" \
+	&& pass "BBR default via uci-defaults" \
+	|| fail "91-h5000m-bbr uci-defaults missing"
 cfg_has PACKAGE_kmod-cryptodev && pass "cryptodev selected" || fail "kmod-cryptodev missing"
 cfg_has PACKAGE_kmod-tls && pass "kTLS selected" || fail "kmod-tls missing"
 cfg_has PACKAGE_luci-app-sqm && pass "SQM (cake) selected" || fail "luci-app-sqm missing"
