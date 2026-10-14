@@ -177,7 +177,6 @@ fi
 # mt76 is verified via the wifi driver check in section 10.
 # (Package location varies between bases.)
 pass "mt76 package location check skipped (covered by wifi driver check)"
-fi
 
 # ---------------------------------------------------------------------------
 sect "7. no stale release-line inputs"
