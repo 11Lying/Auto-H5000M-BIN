@@ -1,18 +1,14 @@
---- a/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
-+++ b/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
-@@ -242,3 +242,27 @@
+--- a/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts	2026-10-15 07:53:06.696345607 +0800
++++ b/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts	2026-10-15 07:53:35.125683769 +0800
+@@ -243,3 +243,26 @@
  	pinctrl-0 = <&uart0_pins>;
  	status = "okay";
  };
 +
-+/* MTK HNAT hardware NAT acceleration node.
-+ * Values taken from Hiveton's own H5000M firmware (HiGoROS, 6.6.94),
-+ * DTB node /soc_netsys/hnat@15000000. MT7987's HNAT/PPE is at
-+ * 0x15100000 (same as ethernet@15100000).
-+ * Note: this firmware uses compatible "mediatek,mtk-hnat_v5" and
-+ * ext-devices-prefix (6.6 driver). On 6.12, verify the driver still
-+ * accepts _v5 and prefix matching; fall back to ext-devices if not.
-+ */
++// MTK HNAT hardware NAT acceleration node.
++// Values taken from Hiveton's own H5000M firmware (HiGoROS, 6.6.94),
++// DTB node /soc_netsys/hnat@15000000. MT7987's HNAT/PPE is at
++// 0x15100000 (same as ethernet@15100000).
 +hnat: hnat@15100000 {
 +	compatible = "mediatek,mtk-hnat_v5";
 +	reg = <0 0x15100000 0 0x80000>;
@@ -25,11 +21,8 @@
 +	mtketh-ppd = "hnat";
 +	mtketh-max-gmac = <2>;
 +	mtketh-ppe-num = <2>;
-+	/* USB/QMI/RMNET hardware acceleration whitelist.
-+	 * Prefix matching covers usb0, wwan0, rmnet_data0, etc.
-+	 * (6.6 driver; 6.12 may only support exact ext-devices,
-+	 * so keep both.)
-+	 */
++	// USB/QMI/RMNET hardware acceleration whitelist.
++	// Prefix matching covers usb0, wwan0, rmnet_data0, etc.
 +	ext-devices-prefix = "usb", "wwan", "rmnet", "eth2", "eth3";
 +	ext-devices = "wwan0", "usb0";
 +	status = "okay";
