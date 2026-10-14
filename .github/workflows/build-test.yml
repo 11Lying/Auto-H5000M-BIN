@@ -52,7 +52,7 @@ jobs:
         run: |
           set -euxo pipefail
           bash -n scripts/local-build.sh scripts/verify-config.sh
-          test "$(find patches -maxdepth 1 -type f | wc -l)" -eq 3
+          test "$(find patches -maxdepth 1 -type f | wc -l)" -eq 2
           ! find . -path './.git' -prune -o -type f -print | grep -E 'h5000m-kit|mtwifi|Airpifanctrl|turboacc|chasey|padavanonly|openwrt-24\.10' || true
           grep -q 'immortalwrt/immortalwrt' README.md
           grep -q '4fc16f2985a358bd43bb522e43f05395fcbd6ed5' README.md
@@ -187,13 +187,20 @@ jobs:
           test -s artifacts/sha256sums.txt
           grep -q 'source_commit=4fc16f2985a358bd43bb522e43f05395fcbd6ed5' artifacts/H5000M-IDENTITY.txt
           grep -q 'wifi_stack=official mt76' artifacts/H5000M-IDENTITY.txt
-          grep -q 'fan_patches=970+971+972 applied; upstream thermal trips retained' artifacts/H5000M-IDENTITY.txt
+          grep -q 'fan_patches=970+972 applied, pwm-fan built-in (=y); upstream thermal trips retained' artifacts/H5000M-IDENTITY.txt
           grep -q '^CONFIG_TARGET_mediatek=y$' artifacts/build.config
           grep -q '^CONFIG_TARGET_mediatek_filogic=y$' artifacts/build.config
           grep -q '^CONFIG_TARGET_mediatek_filogic_DEVICE_hiveton_h5000m=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_luci-app-openclash=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_luci-app-qmodem-next=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_h5000m-fancontrol=y$' artifacts/build.config
+          grep -q '^CONFIG_SENSORS_PWM_FAN=y$' artifacts/build.config
+          ! grep -q '^CONFIG_PACKAGE_kmod-hwmon-pwmfan=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_kmod-tcp-bbr=y$' artifacts/build.config
+          grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_kmod-cryptodev=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_kmod-tls=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_luci-app-sqm=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_kmod-mt7996e=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_kmod-mt76-core=y$' artifacts/build.config
           grep -q '^CONFIG_CCACHE=y$' artifacts/build.config
