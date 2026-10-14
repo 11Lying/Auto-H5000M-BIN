@@ -116,12 +116,14 @@ prepare_feeds() {
 	[ -f "$SOURCE_DIR/feeds.conf.default" ] || die "missing $SOURCE_DIR/feeds.conf.default"
 	[ -f "$EXPECTED_FEEDS" ] || die "missing $EXPECTED_FEEDS"
 
-	# Every upstream feed line in the tree must also be in our file, unchanged.
-	local line
+	# For chasey-dev base: upstream uses branch names (;openwrt-25.12), we use
+	# pinned commits (^<sha>). Verify the feed URLs match, allowing pin vs branch.
+	local line url
 	while read -r line; do
 		[ -n "$line" ] || continue
-		grep -qxF "$line" "$EXPECTED_FEEDS" \
-			|| die "upstream feed line not mirrored in $EXPECTED_FEEDS: $line"
+		url="$(printf '%s' "$line" | sed -E 's/^src-git [^ ]+ //; s/[;^].*$//')"
+		grep -qE "^src-git [^ ]+ ${url}[;^]" "$EXPECTED_FEEDS" \
+			|| die "upstream feed URL not mirrored in $EXPECTED_FEEDS: $url"
 	done < <(grep '^src-git' "$SOURCE_DIR/feeds.conf.default")
 
 	# ...and we must not have re-pointed any official feed at another branch.
