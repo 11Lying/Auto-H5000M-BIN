@@ -29,7 +29,7 @@ QModem's stable feed supplies the modem core, AT daemon, serial/QMI dependencies
 
 The stock H5000M image also retains the packages declared by the official device definition:
 
-- `pwm-fan` (built into the kernel, not a module — see below)
+- `kmod-hwmon-pwmfan`
 - `kmod-usb3`
 - `mt7987-2p5g-phy-firmware`
 - `kmod-mt7996e`
@@ -52,7 +52,7 @@ The only custom network default is fw4 hardware/software flow offload enablement
 
 ## Fan control and startup handover
 
-The official H5000M DTS remains the base. A narrowly-scoped board overlay adds `pwm-fan,boot-duty = <89>` (about 35% of 255) to prevent the upstream driver's 100% probe duty. The upstream `pwm-fan` driver gets the matching optional-property patch; the stock thermal cooling levels and critical trips are unchanged. The driver is built into the kernel (`CONFIG_SENSORS_PWM_FAN=y`) instead of a module, so it probes during kernel init — the full-speed window before userspace takes over is as short as it can be without bootloader changes.
+The official H5000M DTS remains the base. A narrowly-scoped board overlay adds `pwm-fan,boot-duty = <89>` (about 35% of 255) to prevent the upstream driver's 100% probe duty. The upstream `pwm-fan` driver gets the matching optional-property patch; the stock thermal cooling levels and critical trips are unchanged. A module autoload patch loads pwm-fan in the early module pass.
 
 The local `h5000m-fancontrol` package starts at init priority 15. It applies the configured temperature curve, immediately raises PWM, delays/hysteresis-protects reductions, takes over the shared CPU thermal governor, and restores it on exit. The defaults use the existing H5000M curve, 5-second sampling, 3°C hysteresis, 5-second down-delay, Wi-Fi temperature with 5°C offset, and a 153/255 safe PWM only if both temperature sources fail at startup. Runtime boot timing and acoustic behavior still require a post-flash hardware check.
 
@@ -60,7 +60,7 @@ The local `h5000m-fancontrol` package starts at init priority 15. It applies the
 
 On top of the stock device packages:
 
-- **BBR** (`kmod-tcp-bbr`, default congestion control) — better than cubic on variable-latency 5G links.
+- **BBR** (`kmod-tcp-bbr`) — better than cubic on variable-latency 5G links. Set as default at first boot via uci-defaults (`91-h5000m-bbr` writes `/etc/sysctl.d/10-bbr.conf`); the kernel default cannot be set from the seed config, so sysctl is the supported path.
 - **Proxy acceleration** (`kmod-cryptodev` + `kmod-tls`) — kernel crypto and kTLS record processing for OpenClash.
 - **SQM** (`luci-app-sqm`, cake) — keeps latency stable when the 5G uplink jitters. Installed but not enabled; set per-link speeds in LuCI after flashing.
 
