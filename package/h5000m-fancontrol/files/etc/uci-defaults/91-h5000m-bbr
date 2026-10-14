@@ -1,0 +1,10 @@
+#!/bin/sh
+# Prefer BBR TCP congestion control (kmod-tcp-bbr is installed).
+# The kernel default cannot be set from the seed .config, so apply it here
+# persistently via sysctl.d on first boot.
+mkdir -p /etc/sysctl.d
+printf '%s\n' 'net.ipv4.tcp_congestion_control=bbr' > /etc/sysctl.d/10-bbr.conf
+# Apply immediately if the module is already loaded; otherwise it takes
+# effect at next boot when the module loads.
+sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1 || true
+exit 0
