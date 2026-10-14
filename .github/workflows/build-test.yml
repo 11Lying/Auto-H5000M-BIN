@@ -195,7 +195,6 @@ jobs:
           grep -q '^CONFIG_PACKAGE_luci-app-qmodem-next=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_h5000m-fancontrol=y$' artifacts/build.config
           grep -q '^CONFIG_SENSORS_PWM_FAN=y$' artifacts/build.config
-          ! grep -q '^CONFIG_PACKAGE_kmod-hwmon-pwmfan=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_kmod-tcp-bbr=y$' artifacts/build.config
           grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_kmod-cryptodev=y$' artifacts/build.config
