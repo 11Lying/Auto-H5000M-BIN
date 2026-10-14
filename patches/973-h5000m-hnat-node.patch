@@ -1,30 +1,36 @@
 --- a/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
 +++ b/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
-@@ -242,3 +242,23 @@
+@@ -242,3 +242,27 @@
  	pinctrl-0 = <&uart0_pins>;
  	status = "okay";
  };
 +
 +/* MTK HNAT hardware NAT acceleration node.
-+ * MT7987's HNAT/PPE shares the NETSYS address space at 0x15100000
-+ * (same as ethernet@15100000). This node is present in MTK's internal
-+ * mt7987-netsys.dtsi but missing from all open-source trees, so we add
-+ * it here for H5000M.
-+ * compatible "mediatek,mtk-hnat" maps to hnat_data_v3 in the driver,
-+ * suitable for MT7987 (Filogic 800).
++ * Values taken from Hiveton's own H5000M firmware (HiGoROS, 6.6.94),
++ * DTB node /soc_netsys/hnat@15000000. MT7987's HNAT/PPE is at
++ * 0x15100000 (same as ethernet@15100000).
++ * Note: this firmware uses compatible "mediatek,mtk-hnat_v5" and
++ * ext-devices-prefix (6.6 driver). On 6.12, verify the driver still
++ * accepts _v5 and prefix matching; fall back to ext-devices if not.
 + */
 +hnat: hnat@15100000 {
-+	compatible = "mediatek,mtk-hnat";
++	compatible = "mediatek,mtk-hnat_v5";
 +	reg = <0 0x15100000 0 0x80000>;
++	interrupts = <0 0xc6 4>;
 +	resets = <&ethsys 0>;
 +	reset-names = "mtketh";
 +	mtketh-wan = "eth1";
-+	mtketh-lan = "lan";
++	mtketh-lan = "eth0";
++	mtketh-lan2 = "hnat";
++	mtketh-ppd = "hnat";
 +	mtketh-max-gmac = <2>;
 +	mtketh-ppe-num = <2>;
-+	/* USB (QMI wwan0) hardware acceleration whitelist.
-+	 * 6.12 driver only supports exact match (no prefix matching).
++	/* USB/QMI/RMNET hardware acceleration whitelist.
++	 * Prefix matching covers usb0, wwan0, rmnet_data0, etc.
++	 * (6.6 driver; 6.12 may only support exact ext-devices,
++	 * so keep both.)
 +	 */
-+	ext-devices = "wwan0";
++	ext-devices-prefix = "usb", "wwan", "rmnet", "eth2", "eth3";
++	ext-devices = "wwan0", "usb0";
 +	status = "okay";
 +};
