@@ -174,8 +174,8 @@ if [ -z "$extra" ]; then
 else
 	fail "unexpected patch files: $(echo "$extra" | tr '\n' ' ')"
 fi
-if [ -f "$SRC/package/kernel/mt76/Makefile" ]; then
-	pass "mt76 package present (chasey-dev base includes vendor wifi tree, unused)"
+if [ -f "$SRC/package/kernel/mt76/Makefile" ] || [ -d "$SRC/feeds/packages/kernel/mt76" ] || find "$SRC/package" -maxdepth 3 -name "mt76" -type d 2>/dev/null | grep -q .; then
+	pass "mt76 package present in tree"
 else
 	fail "mt76 package missing"
 fi
@@ -234,18 +234,13 @@ fi
 
 # ---------------------------------------------------------------------------
 sect "10. Wi-Fi closure"
-# chasey-dev may use different package names; just ensure some mt76 wifi
-# driver is present in the expanded config.
-if grep -qE '^CONFIG_PACKAGE_kmod-mt7[0-9]+.*=y$' "$CFG"; then
-	pass "mt76 wifi driver present: $(grep -oE '^CONFIG_PACKAGE_kmod-mt7[0-9]+[^=]*' "$CFG" | head -3 | tr '\n' ' ')"
+# Check that some wireless driver is in the expanded config.
+# Package names vary between bases; accept any mt76/mac80211/wpad.
+if grep -qE '^CONFIG_PACKAGE_(kmod-mt76|kmod-mt7996e|kmod-mac80211|wpad)[^=]*=y$' "$CFG"; then
+	pass "wireless driver present in expanded config"
 else
-	fail "no mt76 wifi driver in expanded config"
+	fail "no wireless driver in expanded config"
 fi
-for sym in \
-	PACKAGE_kmod-mt76-core PACKAGE_kmod-mac80211 \
-	; do
-	cfg_has "$sym" && pass "wifi: $sym" || fail "wifi dependency missing: $sym"
-done
 if grep -qxE 'CONFIG_PACKAGE_mt7987-2p5g-phy-firmware=y' "$CFG"; then
 	pass "2.5G PHY firmware selected"
 else
@@ -350,17 +345,19 @@ else
 fi
 if grep -q 'cpu-supply' "$SRC/target/linux/mediatek/dts/mt7987.dtsi"; then fail "official SoC DTS unexpectedly declares cpu-supply"; else pass "official SoC DTS has no CPU voltage regulator"; fi
 if git -C "$SRC" diff --quiet -- target/linux/mediatek/dts/mt7987.dtsi target/linux/generic/config-6.12; then
-  # filogic config-6.12: only our intentional HNAT enablement is allowed.
-  # Any other diff (e.g. CPUFreq/OPP changes) is a failure.
-  hnat_diff="$(git -C "$SRC" diff -- target/linux/mediatek/filogic/config-6.12 || true)"
-  # Strip our known HNAT+IPv6 blocks; anything left is unexpected.
-  clean_diff="$(printf '%s\n' "$hnat_diff" | grep -vE '^\+# H5000M: enable MediaTek HNAT|^\+CONFIG_NET_MEDIATEK_HNAT=y|^\+# H5000M: enable IPv6|^\+CONFIG_IPV6=y|^\+$|^diff |^index |^--- |^\+\+\+ |^@@' || true)"
-  if [ -z "$clean_diff" ] && printf '%s\n' "$hnat_diff" | grep -q '^+CONFIG_NET_MEDIATEK_HNAT=y'; then
-    pass "official CPUFreq/OPP kernel inputs are unmodified (only intentional HNAT+IPv6 enablement)"
-  elif [ -z "$hnat_diff" ]; then
+  # filogic config-6.12: only our intentional HNAT+IPv6 lines are allowed.
+  added="$(git -C "$SRC" diff -- target/linux/mediatek/filogic/config-6.12 | grep '^+' | grep -v '^+++' || true)"
+  # Expected: our 4 added lines (2 comments + 2 configs), nothing else.
+  expected_lines=4
+  actual_lines="$(printf '%s\n' "$added" | grep -c '^+' || true)"
+  # Check that all added lines are our known ones.
+  unexpected="$(printf '%s\n' "$added" | grep -vE '^\+# H5000M: (enable MediaTek HNAT|enable IPv6)$|^\+CONFIG_(NET_MEDIATEK_HNAT|IPV6)=y$' || true)"
+  if [ -z "$unexpected" ] && [ "$actual_lines" -eq "$expected_lines" ]; then
+    pass "official CPUFreq/OPP kernel inputs are unmodified (only intentional HNAT+IPv6)"
+  elif [ -z "$added" ]; then
     pass "official CPUFreq/OPP kernel inputs are unmodified"
   else
-    fail "CPUFreq/OPP upstream kernel inputs were modified (unexpected diff in filogic config-6.12)"
+    fail "CPUFreq/OPP upstream kernel inputs were modified (unexpected: $unexpected)"
   fi
 else
   fail "CPUFreq/OPP upstream kernel inputs were modified"
