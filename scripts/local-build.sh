@@ -315,7 +315,7 @@ collect() {
 	# provenance
 	{
 		echo "build_time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-		echo "source=immortalwrt/immortalwrt"
+		echo "source=chasey-dev/immortalwrt-mt798x-rebase"
 		echo "source_ref=$REPO_REF"
 		echo "source_commit=$(git -C "$SOURCE_DIR" rev-parse HEAD)"
 		echo "device=hiveton_h5000m"
