@@ -94,9 +94,18 @@ clone_source() {
 		$ok || die "could not clone $REPO_URL"
 	fi
 
-	# For branch-based sources (chasey-dev 25.12), verify the pinned commit.
+	# For branch-based sources (chasey-dev 25.12), checkout the pinned commit.
+	# The shallow clone only has the branch tip; fetch the pinned commit.
 	local head
 	head="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+	if [ "$head" != "$REPO_COMMIT" ]; then
+		log "fetching pinned commit $REPO_COMMIT"
+		git -C "$SOURCE_DIR" fetch --depth 1 origin "$REPO_COMMIT" || \
+			git -C "$SOURCE_DIR" fetch origin "$REPO_COMMIT"
+		git -C "$SOURCE_DIR" checkout "$REPO_COMMIT" || \
+			die "could not checkout pinned commit $REPO_COMMIT"
+		head="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+	fi
 	[ "$head" = "$REPO_COMMIT" ] || die "expected commit $REPO_COMMIT, got $head"
 
 	# Compiler cache directory, cached by CI as immortalwrt/.ccache. Created here
