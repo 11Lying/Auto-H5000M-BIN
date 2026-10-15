@@ -185,7 +185,7 @@ jobs:
           test -s artifacts/build.config
           test -s artifacts/H5000M-IDENTITY.txt
           test -s artifacts/sha256sums.txt
-          grep -q 'source_commit=4fc16f2985a358bd43bb522e43f05395fcbd6ed5' artifacts/H5000M-IDENTITY.txt
+          grep -q 'source_commit=468e251661cb46face4ca0c961238282a6eaaa0a' artifacts/H5000M-IDENTITY.txt
           grep -q 'wifi_stack=official mt76' artifacts/H5000M-IDENTITY.txt
           grep -q 'fan_patches=970+971+972 applied; upstream thermal trips retained' artifacts/H5000M-IDENTITY.txt
           grep -q '^CONFIG_TARGET_mediatek=y$' artifacts/build.config
