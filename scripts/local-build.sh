@@ -190,6 +190,7 @@ apply_patches() {
 	# official ImmortalWrt 25.12 package so kmod-mt7996e, mt76-core and the
 	# MT7992 firmware are actually selected and installed in the image.
 	[ -f "$ROOT_DIR/vendor/mt76/Makefile" ] || die "missing vendored mt76 package"
+	[ -f "$ROOT_DIR/vendor/mt76/patches/110-mtk-wed-v3.1-compat.patch" ] || die "missing MTK WED 3.1 compatibility patch"
 	rm -rf "$SOURCE_DIR/package/kernel/mt76"
 	mkdir -p "$SOURCE_DIR/package/kernel"
 	cp -a "$ROOT_DIR/vendor/mt76" "$SOURCE_DIR/package/kernel/mt76"

@@ -15,3 +15,10 @@ has no MT7992 Wi-Fi driver.
 
 `scripts/local-build.sh` stages this directory as
 `immortalwrt/package/kernel/mt76` before `make defconfig`.
+
+The package also carries `patches/110-mtk-wed-v3.1-compat.patch`, an adaptation
+of MediaTek MTK OpenWrt Feeds patch 0049 (commit
+`7a38cb57511c6884638d72e26aaa14eb34c496c6`). It bridges the mt76 WED setup to
+the MT7987 WED 3.1 kernel API used by the pinned base; without it, upstream
+mt76 assigns a scalar to the kernel's `wpdma_tx[]` array and does not initialize
+the WED 3.1 ring layout.

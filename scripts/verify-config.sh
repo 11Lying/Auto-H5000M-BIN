@@ -183,6 +183,11 @@ if [ -f "$SRC/package/kernel/mt76/Makefile" ]; then
 else
 	fail "mt76 package missing: $SRC/package/kernel/mt76/Makefile"
 fi
+if [ -f "$SRC/package/kernel/mt76/patches/110-mtk-wed-v3.1-compat.patch" ]; then
+	pass "MTK WED 3.1 compatibility patch staged"
+else
+	fail "MTK WED 3.1 compatibility patch missing"
+fi
 
 # ---------------------------------------------------------------------------
 sect "7. no stale release-line inputs"
