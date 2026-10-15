@@ -31,8 +31,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SOURCE_COMMIT: 4fc16f2985a358bd43bb522e43f05395fcbd6ed5
-  SOURCE_REF: v25.12.2
+  SOURCE_COMMIT: 468e251661cb46face4ca0c961238282a6eaaa0a
+  SOURCE_REF: 25.12
   TARGET: mediatek/filogic
   DEVICE: hiveton_h5000m
   TZ: Asia/Shanghai
