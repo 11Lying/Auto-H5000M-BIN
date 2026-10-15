@@ -174,9 +174,15 @@ if [ -z "$extra" ]; then
 else
 	fail "unexpected patch files: $(echo "$extra" | tr '\n' ' ')"
 fi
-# mt76 is verified via the wifi driver check in section 10.
-# (Package location varies between bases.)
-pass "mt76 package location check skipped (covered by wifi driver check)"
+# mt76 must be staged: the 25.12 base omits upstream's package/kernel/mt76
+# while the H5000M device profile still declares kmod-mt7996e and
+# kmod-mt7992-23-firmware. local-build.sh vendors the official openwrt-25.12
+# recipe from vendor/mt76 so the image really ships the Wi-Fi driver.
+if [ -f "$SRC/package/kernel/mt76/Makefile" ]; then
+	pass "mt76 package staged from vendor/mt76 (official openwrt-25.12 recipe)"
+else
+	fail "mt76 package missing: $SRC/package/kernel/mt76/Makefile"
+fi
 
 # ---------------------------------------------------------------------------
 sect "7. no stale release-line inputs"
@@ -249,6 +255,9 @@ if grep -qE '^CONFIG_PACKAGE_wpad[^=]*=y$' "$CFG"; then
 else
 	fail "no wpad variant selected"
 fi
+for sym in PACKAGE_kmod-mt7996e PACKAGE_kmod-mt76-core PACKAGE_kmod-mt7992-23-firmware; do
+	cfg_has "$sym" && pass "wifi: $sym" || fail "wifi dependency missing: $sym"
+done
 # the DTS binds this device to the in-tree mt76 driver
 KCFG="$SRC/target/linux/mediatek/filogic/config-6.12"
 for sym in CONFIG_NET_MEDIATEK_SOC CONFIG_NET_MEDIATEK_SOC_WED; do
@@ -326,6 +335,9 @@ cfg_has PACKAGE_kmod-tcp-bbr && pass "BBR module selected" || fail "kmod-tcp-bbr
 grep -q 'tcp_congestion_control=bbr' "$ROOT_DIR/package/h5000m-fancontrol/files/etc/uci-defaults/91-h5000m-bbr" \
 	&& pass "BBR default via uci-defaults" \
 	|| fail "91-h5000m-bbr uci-defaults missing"
+grep -q '91-h5000m-bbr' "$ROOT_DIR/package/h5000m-fancontrol/Makefile" \
+	&& pass "BBR uci-defaults installed by the package" \
+	|| fail "91-h5000m-bbr is not installed by the package Makefile"
 cfg_has PACKAGE_kmod-cryptodev && pass "cryptodev selected" || fail "kmod-cryptodev missing"
 cfg_has PACKAGE_kmod-tls && pass "kTLS selected" || fail "kmod-tls missing"
 cfg_has PACKAGE_luci-app-sqm && pass "SQM (cake) selected" || fail "luci-app-sqm missing"

@@ -36,6 +36,7 @@ define Package/h5000m-fancontrol/install
 	$(INSTALL_BIN) ./files/etc/init.d/fancontrol $(1)/etc/init.d/fancontrol
 	$(INSTALL_CONF) ./files/etc/config/fancontrol $(1)/etc/config/fancontrol
 	$(INSTALL_BIN) ./files/etc/uci-defaults/90-h5000m-hw-offload $(1)/etc/uci-defaults/90-h5000m-hw-offload
+	$(INSTALL_BIN) ./files/etc/uci-defaults/91-h5000m-bbr $(1)/etc/uci-defaults/91-h5000m-bbr
 	$(INSTALL_BIN) ./files/usr/bin/h5000m-audit $(1)/usr/bin/h5000m-audit
 endef
 

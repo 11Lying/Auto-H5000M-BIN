@@ -1,26 +1,27 @@
-# Hiveton H5000M — ImmortalWrt 25.12.2 official stable
+# Hiveton H5000M — ImmortalWrt 25.12 HNAT build
 
-This repository builds a deliberately small, auditable Hiveton H5000M image from the **official ImmortalWrt v25.12.2 release tag**.
+This repository builds a small, auditable Hiveton H5000M image from the pinned ImmortalWrt 25.12-based MTK tree, with HNAT enabled for the H5000M.
 
 ## Baseline
 
 | Item | Value |
 |---|---|
-| Source | `immortalwrt/immortalwrt` |
-| Release tag | `v25.12.2` |
-| Resolved source commit | `4fc16f2985a358bd43bb522e43f05395fcbd6ed5` |
+| Source | `chasey-dev/immortalwrt-mt798x-rebase` |
+| Source ref | `25.12` |
+| Pinned source commit | `468e251661cb46face4ca0c961238282a6eaaa0a` |
+| ImmortalWrt upstream merge base | `ce35a9e4ef1b87fbbc2146036ce6693e4242861a` |
 | Target | `mediatek/filogic` |
 | Device | `hiveton_h5000m` |
-| Kernel | official 6.12.103 source definition |
-| Wi-Fi | official upstream `mt76` (`kmod-mt7996e` + `kmod-mt7992-23-firmware`) |
-| OpenClash | official ImmortalWrt LuCI feed, 0.47.156 |
+| Kernel | 6.12.112 |
+| Wi-Fi | vendored ImmortalWrt `mt76` package (`kmod-mt7996e` + `kmod-mt7992-23-firmware`) |
+| OpenClash | pinned ImmortalWrt LuCI feed, 0.47.156 |
 | QModem | stable `v3.3.0`, commit `5cc80e5f9fc218cd50bef9749dc7d0027e8b3072` |
 
-The official v25.12.2 H5000M target already supplies the official DTS, board network/MAC logic, MT7987 PHY firmware, MT7992 firmware, USB3, PWM fan, image definition and partition/sysupgrade logic. This repository does **not** replace any of those.
+The pinned base supplies the H5000M DTS, board network/MAC logic, MT7987 PHY firmware, USB3, PWM fan, image definition and partition/sysupgrade logic. The base does not include `package/kernel/mt76`; this repository vendors the official ImmortalWrt 25.12 package under `vendor/mt76/` and stages it into the source tree so the MT7992 Wi-Fi driver and firmware are actually built into the image.
 
 ## What is selected
 
-Only these two top-level third-party functions are selected:
+The two primary application services selected are:
 
 1. OpenClash
 2. `luci-app-qmodem-next`
@@ -36,18 +37,18 @@ The stock H5000M image also retains the packages declared by the official device
 - `kmod-mt7992-23-firmware`
 - filesystem/automount utilities declared upstream
 
-The only custom network default is fw4 hardware/software flow offload enablement; WAN, IPv6, DNS, and OpenClash routing remain user-configured.
+The custom network default is fw4 hardware/software flow offload enablement; WAN, IPv6, DNS, and OpenClash routing remain user-configured. Auxiliary selected packages include SmartDNS, SQM and irqbalance.
 
 ## Community patch audit
 
-| Patch / change | Origin and original purpose | v25.12.2 status | Decision |
+| Patch / change | Origin and original purpose | Pinned 25.12 HNAT base status | Decision |
 |---|---|---|---|
 | H5000M DTS replacement | Old vendor/community trees | Official DTS already exists and is used by the official device profile | **Not imported** |
-| `mtwifi-apcli-active-only.patch` | Old closed MediaTek mtwifi tree | No official mtwifi tree is used by v25.12.2 H5000M | **Forbidden / not imported** |
-| old mtwifi/mtwifi-cfg edits | Vendor Wi-Fi SDK integration | Not part of official 25.12.2 | **Forbidden / not imported** |
-| HNAT local-destination patch | Old vendor HNAT behaviour workaround | No evidence required for the official baseline | **Not imported** |
+| `mtwifi-apcli-active-only.patch` | Old closed MediaTek mtwifi tree | Not used by the pinned 25.12 HNAT build | **Not imported** |
+| old mtwifi/mtwifi-cfg edits | Vendor Wi-Fi SDK integration | Not part of the pinned 25.12 HNAT build | **Not imported** |
+| HNAT local-destination patch | Old vendor HNAT behaviour workaround | No board-specific requirement identified for this integration | **Not imported** |
 | QMI WWAN 6.6 patch | Old kernel/vendor QMI tree | Official baseline is kernel 6.12; QModem stable supplies its own compatible vendor QMI package | **Not imported** |
-| MT7992 firmware/eeprom changes | Vendor Wi-Fi tree changes | Official target selects upstream mt76 and `kmod-mt7992-23-firmware`; official DTS binds `mediatek,mt76` | **Not imported** |
+| MT7992 firmware/eeprom changes | Vendor Wi-Fi tree changes | Upstream mt76 and its MT7992 firmware are supplied by `vendor/mt76`; the DTS binds `mediatek,mt76` | **No vendor EEPROM changes** |
 | fan startup patch | Official 6.12 `pwm-fan` probes at 100% and has no boot-duty property | Not upstream; verified necessary for the requested startup-noise fix | **Minimal patch only** |
 
 ## Fan control and startup handover
@@ -63,6 +64,7 @@ On top of the stock device packages:
 - **BBR** (`kmod-tcp-bbr`) — better than cubic on variable-latency 5G links. Set as default at first boot via uci-defaults (`91-h5000m-bbr` writes `/etc/sysctl.d/10-bbr.conf`); the kernel default cannot be set from the seed config, so sysctl is the supported path.
 - **Proxy acceleration** (`kmod-cryptodev` + `kmod-tls`) — kernel crypto and kTLS record processing for OpenClash.
 - **SQM** (`luci-app-sqm`, cake) — keeps latency stable when the 5G uplink jitters. Installed but not enabled; set per-link speeds in LuCI after flashing.
+- **irqbalance** — selected to distribute hardware interrupts across CPU cores; verify its service state after first boot.
 
 Deliberately not added: fullcone NAT (no usable package source found for 25.12), EHT160 wireless tuning (runtime wireless config, out of scope for this repo — the firmware boots with stock wireless defaults).
 
@@ -70,7 +72,7 @@ A read-only `/usr/bin/h5000m-audit` reports board, Wi-Fi, PPE/WED, flow-offload,
 
 ## CPUFreq
 
-The official v25.12.2 MT7987 implementation is retained:
+The pinned base retains the upstream MT7987 CPUFreq implementation:
 
 - `CONFIG_ARM_MEDIATEK_CPUFREQ=y`
 - four upstream OPPs: 500 / 1300 / 1600 / 2000 MHz
@@ -88,13 +90,13 @@ scripts/local-build.sh --config-only
 scripts/local-build.sh
 ```
 
-The script refuses to proceed unless the exact release tag/commit, pinned official feeds, official H5000M profile, mt76 stack and the allowed patch set pass `scripts/verify-config.sh`.
+The script refuses to proceed unless the pinned source commit, pinned feeds, H5000M profile, mt76 stack and allowed patch set pass `scripts/verify-config.sh`.
 
 ## GitHub Actions
 
 - Pushes run the static/config validation job.
-- `workflow_dispatch` with `confirm_firmware_build=true` runs the official baseline firmware build.
+- `workflow_dispatch` with `confirm_firmware_build=true` runs the H5000M HNAT firmware build.
 - The build artifact contains images, expanded `.config`, manifest, source/feed/plugin provenance and SHA256 sums.
-- Cache keys include source commit, target, config hash and patch-set hash. Old padavanonly/chasey source/object caches are not reused.
+- Cache keys include the pinned source commit, target, config hash and patch-set hash.
 
 The vendor/closed-source Wi-Fi branch is intentionally **not built**. It would require a separate non-official kernel/driver integration and is excluded from the stable baseline.

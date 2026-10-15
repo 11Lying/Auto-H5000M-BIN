@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Hiveton H5000M x ImmortalWrt v25.12.2 (official stable)
+# Hiveton H5000M x ImmortalWrt 25.12-based HNAT build
 #
-# The whole build, in order, and nothing else:
+# The whole build, in order:
 #
-#   1. clone official immortalwrt/immortalwrt at the released tag
-#   2. verify our feeds.conf.default against the one shipped in that tag,
-#      then add the single extra feed (QModem, pinned)
-#   3. feeds update / install
-#   4. apply only the permitted fan patches; keep the DTS byte-for-byte upstream
+#   1. clone the pinned chasey-dev ImmortalWrt 25.12-based MTK tree
+#   2. install the pinned ImmortalWrt feeds plus the pinned QModem feed
+#   3. stage the vendored upstream mt76 package and H5000M fan controller
+#   4. enable HNAT/IPv6 and apply the reviewed fan/HNAT DTS patches
 #   5. copy config/h5000m.config -> .config, run `make defconfig`
 #   6. run the static verification suite (scripts/verify-config.sh)
 #   7. make
@@ -185,6 +184,17 @@ apply_patches() {
 	rm -rf "$SOURCE_DIR/package/h5000m-fancontrol"
 	cp -a "$ROOT_DIR/package/h5000m-fancontrol" "$SOURCE_DIR/package/h5000m-fancontrol"
 	log "staged H5000M fan-control package"
+
+	# The chasey-dev 25.12 base does not ship package/kernel/mt76, while the
+	# H5000M device profile still declares the upstream MT7992 stack. Stage the
+	# official ImmortalWrt 25.12 package so kmod-mt7996e, mt76-core and the
+	# MT7992 firmware are actually selected and installed in the image.
+	[ -f "$ROOT_DIR/vendor/mt76/Makefile" ] || die "missing vendored mt76 package"
+	rm -rf "$SOURCE_DIR/package/kernel/mt76"
+	mkdir -p "$SOURCE_DIR/package/kernel"
+	cp -a "$ROOT_DIR/vendor/mt76" "$SOURCE_DIR/package/kernel/mt76"
+	[ -f "$SOURCE_DIR/package/kernel/mt76/Makefile" ] || die "could not stage vendored mt76 package"
+	log "staged vendored official mt76 package (MT7992 Wi-Fi)"
 
 	# 970 (kernel driver) + 971 (early autoload) + 972 (board DTS overlay).
 	for p in 971-hwmon-pwmfan-boot-autoload.patch 972-h5000m-fan-boot-duty.patch 973-h5000m-hnat-node.patch; do

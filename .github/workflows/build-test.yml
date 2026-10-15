@@ -1,4 +1,4 @@
-name: H5000M ImmortalWrt 25.12.2 official baseline
+name: H5000M ImmortalWrt 25.12 HNAT build
 
 on:
   push:
@@ -27,7 +27,7 @@ permissions:
 concurrency:
   # Keep push validation and explicitly dispatched builds from cancelling
   # one another on the same ref.
-  group: h5000m-25.12.2-${{ github.run_id }}
+  group: h5000m-25.12-hnat-${{ github.run_id }}
   cancel-in-progress: false
 
 env:
@@ -53,16 +53,21 @@ jobs:
           set -euxo pipefail
           bash -n scripts/local-build.sh scripts/verify-config.sh
           test "$(find patches -maxdepth 1 -type f | wc -l)" -eq 4
-          ! find . -path './.git' -prune -o -type f -print | grep -E 'h5000m-kit|mtwifi|Airpifanctrl|turboacc|chasey|padavanonly|openwrt-24\.10' || true
-          grep -q 'immortalwrt/immortalwrt' README.md
-          grep -q '4fc16f2985a358bd43bb522e43f05395fcbd6ed5' README.md
+          if find . -path './.git' -prune -o -type f -print | grep -Eq 'h5000m-kit|mtwifi|Airpifanctrl|turboacc|padavanonly|openwrt-24\.10'; then
+            echo 'forbidden legacy path found' >&2
+            exit 1
+          fi
+          test -f vendor/mt76/Makefile
+          grep -q 'chasey-dev/immortalwrt-mt798x-rebase' README.md
+          grep -q '468e251661cb46face4ca0c961238282a6eaaa0a' README.md
+          grep -q 'ce35a9e4ef1b87fbbc2146036ce6693e4242861a' vendor/mt76/README.md
 
       - name: Upstream source/config preflight
         env:
           THREADS: '2'
         run: |
           set -euxo pipefail
-          # This performs a fresh official clone, pinned-feed setup, patch
+          # This performs a fresh clone of the pinned 25.12-based source, pinned-feed setup, patch
           # application, make defconfig and all static audits. No old source
           # tree or target/object cache is available in this job.
           bash scripts/local-build.sh --config-only
@@ -71,15 +76,16 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: H5000M-25.12.2-validation-${{ github.sha }}
+          name: H5000M-25.12-HNAT-validation-${{ github.sha }}
           path: |
             immortalwrt/.config
             immortalwrt/feeds.conf.default
           if-no-files-found: ignore
+          include-hidden-files: true
           retention-days: 14
 
   build:
-    name: Build official H5000M firmware
+    name: Build H5000M firmware
     if: github.event_name == 'workflow_dispatch' && (inputs.confirm_firmware_build == true || inputs.diagnose_libffi == true)
     needs: validate
     runs-on: ubuntu-24.04
@@ -111,7 +117,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: immortalwrt/dl
-          key: ${{ runner.os }}-dl-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-aarch64-gcc14-musl-k6.12-${{ hashFiles('feeds.conf.default', 'config/**', 'patches/**', 'scripts/**') }}
+          key: ${{ runner.os }}-dl-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-aarch64-gcc14-musl-k6.12-${{ hashFiles('feeds.conf.default', 'config/**', 'patches/**', 'scripts/**', 'vendor/**') }}
           restore-keys: |
             ${{ runner.os }}-dl-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-aarch64-gcc14-musl-k6.12-
 
@@ -119,7 +125,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: immortalwrt/.ccache
-          key: ${{ runner.os }}-ccache-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-aarch64-gcc14-musl-k6.12-${{ env.DEVICE }}-${{ hashFiles('config/**', 'patches/**', 'feeds.conf.default') }}
+          key: ${{ runner.os }}-ccache-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-aarch64-gcc14-musl-k6.12-${{ env.DEVICE }}-${{ hashFiles('config/**', 'patches/**', 'feeds.conf.default', 'vendor/**') }}
           restore-keys: |
             ${{ runner.os }}-ccache-${{ env.SOURCE_COMMIT }}-${{ env.TARGET }}-aarch64-gcc14-musl-k6.12-${{ env.DEVICE }}-
 
@@ -169,13 +175,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: H5000M-25.12.2-build-log-${{ github.sha }}
+          name: H5000M-25.12-HNAT-build-log-${{ github.sha }}
           path: |
             build.log
             diagnostic/libffi/**
             immortalwrt/.config
             immortalwrt/feeds.conf.default
           if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 14
 
       - name: Reverse-audit final image inputs
@@ -220,7 +227,7 @@ jobs:
         if: inputs.confirm_firmware_build == true
         uses: actions/upload-artifact@v4
         with:
-          name: H5000M-ImmortalWrt-25.12.2-official-${{ github.sha }}
+          name: H5000M-ImmortalWrt-25.12-HNAT-${{ github.sha }}
           path: artifacts/
           if-no-files-found: error
           retention-days: 30
