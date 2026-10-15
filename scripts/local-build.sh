@@ -215,6 +215,18 @@ if s.count(old) != 1:
 p.write_text(s.replace(old, new))
 PY
 	log "patched pinned libffi InstallDev lookup for target/subtarget build directory"
+
+	# Ruby 3.4.9's configure.ac has a broken AC_CONFIG_MACRO_DIR line referencing
+	# 'tool/m4/$1' (unexpanded shell variable), causing autoreconf to fail.
+	# Disable autoreconf for Ruby; use the pre-generated configure script.
+	local ruby_makefile="$SOURCE_DIR/feeds/packages/lang/ruby/Makefile"
+	if [ -f "$ruby_makefile" ]; then
+		# Remove any existing PKG_FIXUP line and ensure autoreconf is disabled
+		sed -i '/^PKG_FIXUP:=/d' "$ruby_makefile"
+		# Add explicit empty PKG_FIXUP to prevent autoreconf
+		echo "PKG_FIXUP:=" >> "$ruby_makefile"
+		log "disabled autoreconf for ruby (broken configure.ac in 3.4.9)"
+	fi
 }
 
 # ---------------------------------------------------------------------------
