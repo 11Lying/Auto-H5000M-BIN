@@ -1,12 +1,23 @@
 --- a/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts	2026-10-15 11:54:36.472369734 +0800
-+++ b/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts	2026-10-15 11:55:14.086727023 +0800
-@@ -243,3 +243,9 @@
++++ b/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts	2026-10-15 11:56:05.445729016 +0800
+@@ -243,3 +243,20 @@
  	pinctrl-0 = <&uart0_pins>;
  	status = "okay";
  };
 +
-+hnat@15100000 {
++hnat: hnat@15100000 {
 +	compatible = "mediatek,mtk-hnat_v5";
 +	reg = <0 0x15100000 0 0x80000>;
++	interrupts = <0 0xc6 4>;
++	resets = <&ethsys 0>;
++	reset-names = "mtketh";
++	mtketh-wan = "eth1";
++	mtketh-lan = "eth0";
++	mtketh-lan2 = "hnat";
++	mtketh-ppd = "hnat";
++	mtketh-max-gmac = <2>;
++	mtketh-ppe-num = <2>;
++	ext-devices-prefix = "usb", "wwan", "rmnet", "eth2", "eth3";
++	ext-devices = "wwan0", "usb0";
 +	status = "okay";
 +};
