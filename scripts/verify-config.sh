@@ -273,10 +273,41 @@ if grep -q '\.ppe_num = 2' "$SRC/target/linux/mediatek/patches-6.12/750-net-ethe
 else
   fail "MediaTek PPE integration source missing"
 fi
-if grep -q 'CONFIG_NET_MEDIATEK_HNAT=y' "$SRC/target/linux/mediatek/filogic/config-6.12"; then
-  pass "MTK HNAT hardware NAT driver enabled"
+# Kernel symbol alone is not enough: the prior build produced mtkhnat.ko but
+# omitted its package from the sysupgrade image. Require the package selection
+# and verify that the package recipe actually installs that exact module.
+cfg_has PACKAGE_kmod-mediatek_hnat \
+  && pass "HNAT kernel module package selected for the image" \
+  || fail "PACKAGE_kmod-mediatek_hnat missing from expanded .config"
+HNAT_PKG_MK="$SRC/package/kernel/linux/modules/netdevices.mk"
+if grep -q 'define KernelPackage/mediatek_hnat' "$HNAT_PKG_MK" && \
+   grep -q 'CONFIG_NET_MEDIATEK_HNAT' "$HNAT_PKG_MK" && \
+   grep -q 'mtk_hnat/mtkhnat.ko' "$HNAT_PKG_MK"; then
+  pass "HNAT package maps the kernel option to mtkhnat.ko"
 else
-  fail "CONFIG_NET_MEDIATEK_HNAT not enabled in filogic config-6.12"
+  fail "HNAT KernelPackage recipe missing Kconfig/module mapping"
+fi
+KCFG="$SRC/target/linux/mediatek/filogic/config-6.12"
+grep -qx 'CONFIG_IPV6=y' "$KCFG" \
+  && pass "kernel IPv6 enabled for HNAT IPv6 flows" \
+  || fail "kernel IPv6 setting missing from filogic config"
+for sym in PACKAGE_kmod-nf-conntrack PACKAGE_kmod-nf-nat PACKAGE_kmod-nf-flow; do
+  cfg_has "$sym" && pass "$sym selected for HNAT/nft flow offload" || fail "$sym missing"
+done
+cfg_has PACKAGE_hnat-detect \
+  && pass "HNAT interface detector selected" \
+  || fail "hnat-detect missing"
+if grep -q 'compatible = "mediatek,mtk-hnat_v5"' "$DTS" && \
+   grep -q 'ext-devices-prefix = "usb", "wwan"' "$DTS"; then
+  pass "H5000M HNAT v5 DTS node includes USB/WWAN external-interface matching"
+else
+  fail "H5000M HNAT v5 DTS/USB-WWAN device matching missing"
+fi
+HNAT_DETECT_SRC="$(find "$SRC" -path '*/hnat-detect/files/usr/share/ucode/hnat/detect.uc' -print -quit)"
+if [ -n "$HNAT_DETECT_SRC" ] && grep -q 'usb|wwan|eth' "$HNAT_DETECT_SRC"; then
+  pass "HNAT detector has USB/WWAN external-device handling"
+else
+  fail "HNAT detector USB/WWAN path missing"
 fi
 # On hnat-6.12 branch, closed WiFi is NOT available (no MT7992 in SDK),
 # but HNAT is intentionally enabled. Only forbid the WiFi/WARP parts.
@@ -360,12 +391,13 @@ else
 fi
 if grep -q 'cpu-supply' "$SRC/target/linux/mediatek/dts/mt7987.dtsi"; then fail "official SoC DTS unexpectedly declares cpu-supply"; else pass "official SoC DTS has no CPU voltage regulator"; fi
 if git -C "$SRC" diff --quiet -- target/linux/mediatek/dts/mt7987.dtsi target/linux/generic/config-6.12; then
-  # filogic config-6.12: only our intentional HNAT+IPv6 lines are allowed.
+  # The only target kernel fragment change is IPv6; HNAT is enabled through
+  # the selected kmod-mediatek_hnat package and its Kconfig dependency.
   added="$(git -C "$SRC" diff -- target/linux/mediatek/filogic/config-6.12 | grep '^+' | grep -v '^+++' || true)"
   # Expected: our added lines (comments + configs + empty lines), nothing else.
-  unexpected="$(printf '%s\n' "$added" | grep -vE '^\+# H5000M: ' | grep -vE '^\+CONFIG_(NET_MEDIATEK_HNAT|IPV6)=y$' | grep -vE '^\+$' || true)"
+  unexpected="$(printf '%s\n' "$added" | grep -vE '^\+# H5000M: ' | grep -vE '^\+CONFIG_IPV6=y$' | grep -vE '^\+$' || true)"
   if [ -z "$unexpected" ]; then
-    pass "official CPUFreq/OPP kernel inputs are unmodified (only intentional HNAT+IPv6)"
+    pass "official CPUFreq/OPP inputs unmodified (only IPv6 fragment; HNAT enabled via package)"
   elif [ -z "$added" ]; then
     pass "official CPUFreq/OPP kernel inputs are unmodified"
   else
@@ -390,7 +422,12 @@ fi
 for f in "$ROOT_DIR/package/h5000m-fancontrol/files/etc/config/fancontrol" "$ROOT_DIR/package/h5000m-fancontrol/files/etc/init.d/fancontrol" "$ROOT_DIR/package/h5000m-fancontrol/files/usr/bin/h5000m-audit"; do
   [ -s "$f" ] || fail "missing H5000M runtime file: $f"
 done
-if grep -q 'flow_offloading_hw=.1.' "$ROOT_DIR/package/h5000m-fancontrol/files/etc/uci-defaults/90-h5000m-hw-offload"; then pass "fw4 hardware flow offload enabled by device defaults"; else fail "hardware flow offload default missing"; fi
+OFFLOAD_DEFAULT="$ROOT_DIR/package/h5000m-fancontrol/files/etc/uci-defaults/90-h5000m-hw-offload"
+if grep -q "flow_offloading='1'" "$OFFLOAD_DEFAULT" && grep -q "flow_offloading_hw='1'" "$OFFLOAD_DEFAULT"; then
+  pass "fw4 software+hardware flow-offload defaults enabled"
+else
+  fail "fw4 software+hardware flow-offload defaults incomplete"
+fi
 if grep -rqE '192\.168\.88\.1' "$ROOT_DIR/config" "$ROOT_DIR/scripts" \
 	"$ROOT_DIR/patches" 2>/dev/null; then
 	fail "a private LAN address is hard-coded"

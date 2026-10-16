@@ -202,6 +202,11 @@ jobs:
           grep -q '^CONFIG_PACKAGE_luci-app-qmodem-next=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_h5000m-fancontrol=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_kmod-hwmon-pwmfan=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_kmod-mediatek_hnat=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_kmod-nf-conntrack=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_kmod-nf-nat=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_kmod-nf-flow=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_hnat-detect=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_kmod-tcp-bbr=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_kmod-cryptodev=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_kmod-tls=y$' artifacts/build.config
@@ -212,11 +217,22 @@ jobs:
           ! grep -q '^CONFIG_NEED_BPF_TOOLCHAIN=y$' artifacts/build.config
           [ ! -d immortalwrt/staging_dir/host/llvm-bpf ]
           grep -q '^CONFIG_NET_MEDIATEK_SOC_WED=y$' immortalwrt/target/linux/mediatek/filogic/config-6.12
+          grep -qx 'CONFIG_IPV6=y' immortalwrt/target/linux/mediatek/filogic/config-6.12
           grep -q '^CONFIG_PACKAGE_kmod-mt7992-23-firmware=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_mt7987-2p5g-phy-firmware=y$' artifacts/build.config
           ! grep -qE '^CONFIG_PACKAGE_(luci-app-(nikki|mosdns|homeproxy|turboacc-mtk|Airpifanctrl)|modemmanager|h5000m-kit)=y$' artifacts/build.config
           grep -q 'hiveton_h5000m-initramfs-kernel.bin' <(find artifacts -maxdepth 1 -type f -printf '%f\n')
           grep -q 'hiveton_h5000m-squashfs-sysupgrade.bin' <(find artifacts -maxdepth 1 -type f -printf '%f\n')
+          grep -q '^kmod-mediatek_hnat - ' artifacts/openwrt-image.manifest
+          grep -q '^kmod-nf-conntrack - ' artifacts/openwrt-image.manifest
+          grep -q '^kmod-nf-nat - ' artifacts/openwrt-image.manifest
+          grep -q '^kmod-nf-flow - ' artifacts/openwrt-image.manifest
+          grep -q '^kmod-tcp-bbr - ' artifacts/openwrt-image.manifest
+          grep -q '^kmod-usb3 - ' artifacts/openwrt-image.manifest
+          grep -q '^kmod-qmi_wwan_q - ' artifacts/openwrt-image.manifest
+          grep -q '^kmod-mt7996e - ' artifacts/openwrt-image.manifest
+          grep -q '^kmod-mt7992-23-firmware - ' artifacts/openwrt-image.manifest
+          grep -q '^hnat-detect - ' artifacts/openwrt-image.manifest
           grep -q 'h5000m-fancontrol' artifacts/openwrt-image.manifest
           grep -q 'kmod-mt7992-23-firmware' artifacts/openwrt-image.manifest
           grep -q 'luci-app-openclash' artifacts/openwrt-image.manifest

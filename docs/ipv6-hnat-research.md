@@ -1,5 +1,7 @@
 # IPv6 HNAT 调研结论（hnat-6.12）
 
+> **Packaging gate (2026-10-16):** the first successful run compiled `mtkhnat.ko` as a kernel module but left `CONFIG_PACKAGE_kmod-mediatek_hnat` unset, so the module was absent from the sysupgrade image. The seed now selects `kmod-mediatek_hnat`; CI and the build collector require it in the final image manifest. Do not infer runtime acceleration from a source config line or a successful build alone.
+
 ## 结论
 **当前 973 DTS 节点无需任何改动即可支持 IPv6 硬件加速。**
 

@@ -1,6 +1,6 @@
 # Hiveton H5000M — ImmortalWrt 25.12 HNAT build
 
-This repository builds a small, auditable Hiveton H5000M image from the pinned ImmortalWrt 25.12-based MTK tree, with HNAT enabled for the H5000M.
+This repository builds a small, auditable Hiveton H5000M image from the pinned ImmortalWrt 25.12-based MTK tree. It explicitly packages the MediaTek HNAT driver; CI verifies that `kmod-mediatek_hnat` is present in the final image manifest, not merely compiled as a kernel object.
 
 ## Baseline
 
@@ -28,16 +28,14 @@ The two primary application services selected are:
 
 QModem's stable feed supplies the modem core, AT daemon, serial/QMI dependencies, Quectel vendor QMI WWAN driver and supporting tools. The legacy `luci-app-qmodem`, ModemManager and generic modem UI are not selected.
 
-The stock H5000M image also retains the packages declared by the official device definition:
+The image retains the official H5000M device packages and adds the explicit acceleration/data-path packages below:
 
-- `kmod-hwmon-pwmfan`
-- `kmod-usb3`
-- `mt7987-2p5g-phy-firmware`
-- `kmod-mt7996e`
-- `kmod-mt7992-23-firmware`
-- filesystem/automount utilities declared upstream
+- Official: `kmod-hwmon-pwmfan`, `kmod-usb3`, `mt7987-2p5g-phy-firmware`, `kmod-mt7996e`, `kmod-mt7992-23-firmware`, and filesystem/automount utilities.
+- Added: `kmod-mediatek_hnat` (IPv4/IPv6 HNAT/PPE), `kmod-nf-conntrack`, `kmod-nf-nat`, `kmod-nf-flow` (nft flowtable HW/SW offload API), and `hnat-detect` (interface selection and USB/WWAN Rx-PPD handling).
 
-The custom network default is fw4 hardware/software flow offload enablement; WAN, IPv6, DNS, and OpenClash routing remain user-configured. Auxiliary selected packages include SmartDNS, SQM and irqbalance.
+`hnat-detect` is not the HNAT driver; `kmod-mediatek_hnat` is required in the final image.
+
+The first-boot defaults request fw4 software+hardware flow offload. The HNAT module and USB/WWAN detector are included so eligible direct/NAT flows can use the MT7987 PPE path; the final manifest is checked for both. IPv6 is enabled in the kernel and the MTK HNAT driver has IPv6 flow paths. USB 5-Gbps is the physical link capability; HNAT/PPD is a separate forwarding fast path for eligible QMI/WWAN traffic. Actual acceleration still must be confirmed after flashing from HNAT/PPE counters and IPv4/IPv6/USB throughput tests; a config flag alone is not proof. Auxiliary selected packages include SmartDNS, SQM and irqbalance (SQM is installed but not enabled by default because shaping commonly bypasses hardware offload).
 
 ## Community patch audit
 
@@ -61,14 +59,14 @@ The local `h5000m-fancontrol` package starts at init priority 15. It applies the
 
 On top of the stock device packages:
 
-- **BBR** (`kmod-tcp-bbr`) — better than cubic on variable-latency 5G links. Set as default at first boot via uci-defaults (`91-h5000m-bbr` writes `/etc/sysctl.d/10-bbr.conf`); the kernel default cannot be set from the seed config, so sysctl is the supported path.
-- **Proxy acceleration** (`kmod-cryptodev` + `kmod-tls`) — kernel crypto and kTLS record processing for OpenClash.
+- **BBR** (`kmod-tcp-bbr`) — set as default at first boot via uci-defaults (`91-h5000m-bbr` writes `/etc/sysctl.d/10-bbr.conf`). It is software TCP congestion control, useful for variable-latency 5G links and the proxy's outer TCP socket; it is not hardware encryption/offload.
+- **OpenClash/Mihomo TUN proxy traffic is not HNAT-accelerated end-to-end**: packets pass through userspace proxy processing and encryption. HNAT can accelerate eligible direct/forwarded flows, including supported QMI/USB WAN flows, but cannot skip Mihomo's userspace work. `kmod-cryptodev` and `kmod-tls` are retained as kernel interfaces for compatible applications; Mihomo does not automatically consume them, so they are not claimed as proxy acceleration.
 - **SQM** (`luci-app-sqm`, cake) — keeps latency stable when the 5G uplink jitters. Installed but not enabled; set per-link speeds in LuCI after flashing.
 - **irqbalance** — selected to distribute hardware interrupts across CPU cores; verify its service state after first boot.
 
 Deliberately not added: fullcone NAT (no usable package source found for 25.12), EHT160 wireless tuning (runtime wireless config, out of scope for this repo — the firmware boots with stock wireless defaults).
 
-A read-only `/usr/bin/h5000m-audit` reports board, Wi-Fi, PPE/WED, flow-offload, modem, OpenClash and fan state. The first-boot defaults enable fw4 software and hardware flow offload; this configures the official PPE path but does not itself prove that PPE offload is active at runtime.
+A read-only `/usr/bin/h5000m-audit` reports board, Wi-Fi/WED, HNAT/PPE, flow-offload, USB/QMI, BBR, OpenClash and fan state. The first-boot defaults request fw4 software and hardware flow offload; this is only configuration. Runtime proof requires driver binding plus increasing HNAT/PPE flow counters under eligible traffic.
 
 ## CPUFreq
 

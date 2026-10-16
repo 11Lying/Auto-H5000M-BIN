@@ -7,7 +7,7 @@
 #   1. clone the pinned chasey-dev ImmortalWrt 25.12-based MTK tree
 #   2. install the pinned ImmortalWrt feeds plus the pinned QModem feed
 #   3. stage the vendored upstream mt76 package and H5000M fan controller
-#   4. enable HNAT/IPv6 and apply the reviewed fan/HNAT DTS patches
+#   4. select the HNAT kernel package, enable IPv6 and apply reviewed DTS patches
 #   5. copy config/h5000m.config -> .config, run `make defconfig`
 #   6. run the static verification suite (scripts/verify-config.sh)
 #   7. make
@@ -168,18 +168,16 @@ apply_patches() {
 	cp -f "$ROOT_DIR/patches/970-pwm-fan-boot-duty.patch" "$dir/" \
 		|| die "could not stage kernel patch"
 	log "staged target/linux/mediatek/patches-6.12/970-pwm-fan-boot-duty.patch"
-	# Enable MTK HNAT hardware NAT driver (closed-source, in files-6.12).
-	# Cannot be set via seed .config (top-level Kconfig drops raw kernel
-	# symbols), so append directly to the target kernel config.
+	# HNAT is selected as CONFIG_PACKAGE_kmod-mediatek_hnat in the seed.
+	# This is essential: adding CONFIG_NET_MEDIATEK_HNAT to the kernel fragment
+	# can compile mtkhnat.ko as M while omitting the package from the image.
+	# Keep IPv6 explicit in the kernel fragment for the driver's IPv6 path.
 	{
 		echo ""
-		echo "# H5000M: enable MediaTek HNAT hardware NAT acceleration"
-		echo "CONFIG_NET_MEDIATEK_HNAT=y"
-		echo ""
-		echo "# H5000M: enable IPv6 (required for IPv6 HNAT acceleration)"
+		echo "# H5000M: enable IPv6 for MediaTek HNAT IPv6 flow acceleration"
 		echo "CONFIG_IPV6=y"
 	} >> "$SOURCE_DIR/target/linux/mediatek/filogic/config-6.12"
-	log "enabled CONFIG_NET_MEDIATEK_HNAT + CONFIG_IPV6 in filogic config-6.12"
+	log "selected kmod-mediatek_hnat via seed; enabled CONFIG_IPV6 in filogic config-6.12"
 	# Include the maintained userspace controller and read-only audit utility.
 	rm -rf "$SOURCE_DIR/package/h5000m-fancontrol"
 	cp -a "$ROOT_DIR/package/h5000m-fancontrol" "$SOURCE_DIR/package/h5000m-fancontrol"
@@ -317,10 +315,19 @@ collect() {
 
 	# fully expanded config + package manifest + build identity
 	cp -f "$SOURCE_DIR/.config" "$ARTIFACTS_DIR/build.config"
-	if [ -f "$tgt/immortalwrt-mediatek-filogic-hiveton_h5000m.manifest" ]; then
-		cp -f "$tgt/immortalwrt-mediatek-filogic-hiveton_h5000m.manifest" \
-			"$ARTIFACTS_DIR/openwrt-image.manifest"
-	fi
+	grep -q '^CONFIG_PACKAGE_kmod-mediatek_hnat=y$' "$ARTIFACTS_DIR/build.config" \
+		|| die "expanded config did not select kmod-mediatek_hnat"
+	local manifest="$tgt/immortalwrt-mediatek-filogic-hiveton_h5000m.manifest"
+	[ -s "$manifest" ] || die "missing H5000M image manifest"
+	# Gate the published image, not just source config. In particular, this
+	# catches a compiled-but-unpackaged HNAT .ko before firmware is uploaded.
+	for pkg in kmod-mediatek_hnat kmod-nf-conntrack kmod-nf-nat kmod-nf-flow \
+		   kmod-tcp-bbr kmod-usb3 kmod-qmi_wwan_q kmod-mt7996e hnat-detect; do
+		grep -q "^${pkg} - " "$manifest" || die "required acceleration/data-path package absent from image manifest: $pkg"
+	done
+	find "$SOURCE_DIR/bin" -type f -name 'kmod-mediatek_hnat-*.apk' -print -quit | grep -q . \
+		|| die "HNAT kernel module APK was not built"
+	cp -f "$manifest" "$ARTIFACTS_DIR/openwrt-image.manifest"
 	[ -f "$tgt/profiles.json" ] && cp -f "$tgt/profiles.json" "$ARTIFACTS_DIR/" || true
 
 	# provenance
@@ -334,6 +341,7 @@ collect() {
 		echo "kernel=$(sed -n 's/^LINUX_VERSION-6\.12 = //p' "$SOURCE_DIR/target/linux/generic/kernel-6.12")"
 		echo "wifi_stack=official mt76 (kmod-mt7996e + kmod-mt7992-23-firmware)"
 		echo "fan_patches=970+971+972 applied; upstream thermal trips retained"
+		echo "acceleration=HNAT module packaged; nft flow HW+SW; IPv6; USB-QMI; BBR; MT76/WED3.1"
 		echo "--- feeds ---"
 		grep '^src-git' "$SOURCE_DIR/feeds.conf.default"
 		echo "--- openclash ---"
