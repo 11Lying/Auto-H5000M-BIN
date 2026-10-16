@@ -84,8 +84,14 @@ The expanded `.config` and the verification report are uploaded with every build
 ## Build locally
 
 ```sh
-scripts/local-build.sh --config-only
+# First run: config validation + full firmware build (auto jobs/ccache)
 scripts/local-build.sh
+
+# Reuse existing pinned feeds on later local builds; source tree and ccache stay intact
+scripts/local-build.sh --skip-feeds-update
+
+# Optional explicit tuning; 7945HX / 24 GiB: THREADS=12 is a safe starting point
+THREADS=12 CCACHE_MAXSIZE=20G scripts/local-build.sh --skip-feeds-update
 ```
 
 The script refuses to proceed unless the pinned source commit, pinned feeds, H5000M profile, mt76 stack and allowed patch set pass `scripts/verify-config.sh`.

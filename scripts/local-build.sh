@@ -31,7 +31,25 @@ SOURCE_DIR="${SOURCE_DIR:-immortalwrt}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-artifacts}"
 CONFIG_FILE="${CONFIG_FILE:-$ROOT_DIR/config/h5000m.config}"
 EXPECTED_FEEDS="${EXPECTED_FEEDS:-$ROOT_DIR/feeds.conf.default}"
-THREADS="${THREADS:-$(nproc 2>/dev/null || echo 2)}"
+detect_build_jobs() {
+	local jobs mem_kb mem_mb mem_jobs
+	jobs="$(nproc 2>/dev/null || echo 2)"
+	case "$jobs" in ''|*[!0-9]*) jobs=2;; esac
+	# Leave 4 GiB for the OS and budget ~1.7 GiB per active compiler job.
+	# A 24-GiB laptop therefore defaults to 12 jobs instead of nproc's 32.
+	mem_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+	case "$mem_kb" in ''|*[!0-9]*) mem_kb=0;; esac
+	if [ "$mem_kb" -gt 0 ]; then
+		mem_mb=$((mem_kb / 1024))
+		mem_jobs=$(((mem_mb - 4096) / 1700))
+		[ "$mem_jobs" -ge 1 ] || mem_jobs=1
+		[ "$jobs" -le "$mem_jobs" ] || jobs=$mem_jobs
+	fi
+	# Beyond 16 jobs, this target is generally limited by memory and I/O.
+	[ "$jobs" -le 16 ] || jobs=16
+	printf '%s\n' "$jobs"
+}
+THREADS="${THREADS:-$(detect_build_jobs)}"
 
 # Optional GitHub mirror for cloning (only used when set).
 GITHUB_PROXY_PREFIXES="${GITHUB_PROXY_PREFIXES:-}"
@@ -53,7 +71,10 @@ Usage: scripts/local-build.sh [options]
   --libffi-then-build   clean/build libffi with V=s, then continue full firmware build
   --skip-feeds-update   reuse an existing feeds/ tree
 
-Environment: REPO_URL REPO_REF REPO_COMMIT SOURCE_DIR CONFIG_FILE THREADS
+Environment: REPO_URL REPO_REF REPO_COMMIT SOURCE_DIR CONFIG_FILE THREADS CCACHE_DIR CCACHE_MAXSIZE
+
+If THREADS is unset, jobs are capped by detected RAM/CPU (24 GiB -> 12 jobs).
+The local ccache defaults to <SOURCE_DIR>/.ccache and is reused across builds.
 EOF
 }
 
@@ -107,9 +128,18 @@ clone_source() {
 	fi
 	[ "$head" = "$REPO_COMMIT" ] || die "expected commit $REPO_COMMIT, got $head"
 
-	# Compiler cache directory, cached by CI as immortalwrt/.ccache. Created here
-	# (never in the workflow) so the clone step still sees an empty/missing path.
-	mkdir -p "$SOURCE_DIR/.ccache"
+	# Persistent compiler cache. Local builds use the source tree by default;
+	# CI may point CCACHE_DIR at its cache mount. Never clean this directory.
+	export CCACHE_DIR="${CCACHE_DIR:-$SOURCE_DIR/.ccache}"
+	export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-20G}"
+	export CCACHE_COMPRESS="${CCACHE_COMPRESS:-1}"
+	mkdir -p "$CCACHE_DIR"
+	for d in /usr/lib/ccache/bin /usr/lib/ccache; do
+		[ -d "$d" ] && PATH="$d:$PATH"
+	done
+	export PATH
+	command -v ccache >/dev/null 2>&1 && ccache -M "$CCACHE_MAXSIZE" >/dev/null 2>&1 || true
+	log "ccache directory: $CCACHE_DIR (max $CCACHE_MAXSIZE)"
 
 	local kv
 	kv="$(sed -n 's/^LINUX_VERSION-6\.12 = //p' \
@@ -172,12 +202,18 @@ apply_patches() {
 	# This is essential: adding CONFIG_NET_MEDIATEK_HNAT to the kernel fragment
 	# can compile mtkhnat.ko as M while omitting the package from the image.
 	# Keep IPv6 explicit in the kernel fragment for the driver's IPv6 path.
-	{
-		echo ""
-		echo "# H5000M: enable IPv6 for MediaTek HNAT IPv6 flow acceleration"
-		echo "CONFIG_IPV6=y"
-	} >> "$SOURCE_DIR/target/linux/mediatek/filogic/config-6.12"
-	log "selected kmod-mediatek_hnat via seed; enabled CONFIG_IPV6 in filogic config-6.12"
+	local kernel_config="$SOURCE_DIR/target/linux/mediatek/filogic/config-6.12"
+	if ! grep -qx 'CONFIG_IPV6=y' "$kernel_config"; then
+		{
+			echo ""
+			echo "# H5000M: enable IPv6 for MediaTek HNAT IPv6 flow acceleration"
+			echo "CONFIG_IPV6=y"
+		} >> "$kernel_config"
+		log "enabled IPv6 in filogic kernel config"
+	else
+		log "IPv6 already enabled in filogic kernel config"
+	fi
+	log "HNAT selected as packaged module via CONFIG_PACKAGE_kmod-mediatek_hnat"
 	# Include the maintained userspace controller and read-only audit utility.
 	rm -rf "$SOURCE_DIR/package/h5000m-fancontrol"
 	cp -a "$ROOT_DIR/package/h5000m-fancontrol" "$SOURCE_DIR/package/h5000m-fancontrol"
@@ -198,10 +234,14 @@ apply_patches() {
 	# 970 (kernel driver) + 971 (early autoload) + 972 (board DTS overlay).
 	for p in 971-hwmon-pwmfan-boot-autoload.patch 972-h5000m-fan-boot-duty.patch 973-h5000m-hnat-node.patch; do
 		[ -f "$ROOT_DIR/patches/$p" ] || die "missing patch $p"
-		if patch -d "$SOURCE_DIR" -p1 --forward --silent < "$ROOT_DIR/patches/$p"; then
+		if patch -d "$SOURCE_DIR" -p1 --dry-run --forward --silent < "$ROOT_DIR/patches/$p" >/dev/null 2>&1; then
+			patch -d "$SOURCE_DIR" -p1 --forward --silent < "$ROOT_DIR/patches/$p" \
+				|| die "failed to apply $p"
 			log "applied $p"
+		elif patch -d "$SOURCE_DIR" -p1 --dry-run --reverse --silent < "$ROOT_DIR/patches/$p" >/dev/null 2>&1; then
+			log "$p already applied; reusing source tree"
 		else
-			die "failed to apply $p"
+			die "$p neither applies cleanly nor appears already applied"
 		fi
 	done
 
@@ -219,9 +259,12 @@ p = pathlib.Path(sys.argv[1])
 s = p.read_text()
 old = "$(PKG_BUILD_DIR)/$(GNU_TARGET_NAME)*/fficonfig.h"
 new = "$(PKG_BUILD_DIR)/*/*/fficonfig.h"
-if s.count(old) != 1:
-    raise SystemExit(f"expected exactly one libffi header lookup, found {s.count(old)}")
-p.write_text(s.replace(old, new))
+if s.count(old) == 1:
+    p.write_text(s.replace(old, new))
+elif s.count(new) == 1:
+    print("libffi lookup patch already applied")
+else:
+    raise SystemExit(f"expected one stock or patched libffi header lookup; old={s.count(old)} new={s.count(new)}")
 PY
 	log "patched pinned libffi InstallDev lookup for target/subtarget build directory"
 
@@ -361,6 +404,7 @@ collect() {
 main() {
 	cd "$ROOT_DIR"
 
+	log "build parallelism: $THREADS jobs; source cache: ${CCACHE_DIR:-$SOURCE_DIR/.ccache}"
 	if [ "$VERIFY_ONLY" = true ]; then
 		[ -d "$SOURCE_DIR" ] || die "--verify-only needs an existing $SOURCE_DIR"
 		apply_patches
