@@ -1,6 +1,10 @@
-# Hiveton H5000M — ImmortalWrt 25.12 HNAT build
+# Hiveton H5000M — ImmortalWrt 25.12 HNAT/WED repair build
 
-This repository builds a small, auditable Hiveton H5000M image from the pinned ImmortalWrt 25.12-based MTK tree. It explicitly packages the MediaTek HNAT driver; CI verifies that `kmod-mediatek_hnat` is present in the final image manifest, not merely compiled as a kernel object.
+This repository builds a reproducible Hiveton H5000M image from the pinned
+`chasey-dev/immortalwrt-mt798x-rebase` 25.12 tree that matches the audited
+MT7987A/6.12.112 device. The final source is intentionally one baseline only;
+it does not mix the older official `v25.12.2`/6.12.103 tree with the
+chasey-dev tree.
 
 ## Baseline
 
@@ -9,17 +13,42 @@ This repository builds a small, auditable Hiveton H5000M image from the pinned I
 | Source | `chasey-dev/immortalwrt-mt798x-rebase` |
 | Source ref | `25.12` |
 | Pinned source commit | `468e251661cb46face4ca0c961238282a6eaaa0a` |
-| ImmortalWrt upstream merge base | `ce35a9e4ef1b87fbbc2146036ce6693e4242861a` |
 | Target | `mediatek/filogic` |
 | Device | `hiveton_h5000m` |
 | Kernel | 6.12.112 |
-| Wi-Fi | vendored ImmortalWrt `mt76` package (`kmod-mt7996e` + `kmod-mt7992-23-firmware`) |
+| Wi-Fi | vendored official ImmortalWrt 25.12 `mt76` + MT7992 firmware |
 | OpenClash | pinned ImmortalWrt LuCI feed, 0.47.156 |
 | QModem | stable `v3.3.0`, commit `5cc80e5f9fc218cd50bef9749dc7d0027e8b3072` |
 
-The pinned base supplies the H5000M DTS, board network/MAC logic, MT7987 PHY firmware, USB3, PWM fan, image definition and partition/sysupgrade logic. The base does not include `package/kernel/mt76`; this repository vendors the official ImmortalWrt 25.12 package under `vendor/mt76/` and stages it into the source tree so the MT7992 Wi-Fi driver and firmware are actually built into the image.
+The pinned base supplies the H5000M board DTS, MT7987 PHY firmware, USB3,
+image definition and partition/sysupgrade logic. The base does not contain the
+upstream `package/kernel/mt76` package, so this repository vendors and stages
+that exact package. The base's MTK Ethernet/HNAT sources are patched below;
+no closed-source mtwifi tree is selected.
 
-## What is selected
+## Hardware-acceleration repairs
+
+The build applies seven persistent, version-checked changes:
+
+- `970/971/972`: existing fan startup handover only; thermal levels/trips are untouched.
+- `973`: adds the four MT7987 PDMA IRQ resources (189–192) before the four FE
+  resources (196–199), matching the pinned RSS driver, and adds the required
+  HNAT `mtketh-soc = <&eth>` phandle to the H5000M node.
+- `974`: makes HNAT probe failure cleanup conditional on a successfully mapped
+  `fe_base`, preventing the previously observed NULL MMIO access/panic.
+- `975`: generates `wed_enable=Y` for the MT7996E module. It does not enable
+  RRO; WED activation still depends on a successful Ethernet provider probe.
+- `976`: autoloads the packaged HNAT module after built-in Ethernet probing.
+
+The final image must contain `kmod-mediatek_hnat`, `hnat-detect`, the NF
+conntrack/NAT/flow packages, MT76/MT7992, QMI/QMAP and OpenClash. The build
+collector checks the expanded config and image manifest, not just the presence
+of a source `.ko`.
+
+The source and build checks intentionally do **not** claim runtime PPE/HNAT,
+WED or QMI external-device acceleration until a later approved on-device
+counter check proves it. No router-side module load or stress test is part of
+this workspace build.
 
 The two primary application services selected are:
 
@@ -49,11 +78,27 @@ The first-boot defaults request fw4 software+hardware flow offload. The HNAT mod
 | MT7992 firmware/eeprom changes | Vendor Wi-Fi tree changes | Upstream mt76 and its MT7992 firmware are supplied by `vendor/mt76`; the DTS binds `mediatek,mt76` | **No vendor EEPROM changes** |
 | fan startup patch | Official 6.12 `pwm-fan` probes at 100% and has no boot-duty property | Not upstream; verified necessary for the requested startup-noise fix | **Minimal patch only** |
 
-## Fan control and startup handover
+## Full-cone NAT decision
+
+The pinned firewall4/fullconenat-nft source is real and is packaged as a
+firewall4 dependency, but full-cone rules are disabled in the H5000M first-boot
+defaults. The nft full-cone expression is UDP-oriented and has not been proven
+compatible with this MT7987 PPE/HNAT path; enabling it by default would trade
+away the stable hardware-offload path for an unverified behavior. It remains
+available for a separately tested UCI decision.
+
 
 The official H5000M DTS remains the base. A narrowly-scoped board overlay adds `pwm-fan,boot-duty = <89>` (about 35% of 255) to prevent the upstream driver's 100% probe duty. The upstream `pwm-fan` driver gets the matching optional-property patch; the stock thermal cooling levels and critical trips are unchanged. A module autoload patch loads pwm-fan in the early module pass.
 
-The local `h5000m-fancontrol` package starts at init priority 15. It applies the configured temperature curve, immediately raises PWM, delays/hysteresis-protects reductions, takes over the shared CPU thermal governor, and restores it on exit. The defaults use the existing H5000M curve, 5-second sampling, 3°C hysteresis, 5-second down-delay, Wi-Fi temperature with 5°C offset, and a 153/255 safe PWM only if both temperature sources fail at startup. Runtime boot timing and acoustic behavior still require a post-flash hardware check.
+The local `h5000m-fancontrol` package starts at init priority 15. It applies
+the configured temperature curve, immediately raises PWM only after the
+configured sustained-rise debounce (with an emergency high-temperature bypass),
+delays/hysteresis-protects reductions, takes over the shared CPU thermal
+governor, and restores it on exit. The defaults use the existing H5000M curve,
+5-second sampling, 3°C hysteresis, 3-second down-delay, 15-second up-delay,
+Wi-Fi temperature with 5°C offset, and a 153/255 safe PWM only if both
+temperature sources fail at startup. Runtime boot timing and acoustic behavior
+still require a post-flash hardware check.
 
 ## Performance optimizations
 
@@ -64,7 +109,11 @@ On top of the stock device packages:
 - **SQM** (`luci-app-sqm`, cake) — keeps latency stable when the 5G uplink jitters. Installed but not enabled; set per-link speeds in LuCI after flashing.
 - **irqbalance** — selected to distribute hardware interrupts across CPU cores; verify its service state after first boot.
 
-Deliberately not added: fullcone NAT (no usable package source found for 25.12), EHT160 wireless tuning (runtime wireless config, out of scope for this repo — the firmware boots with stock wireless defaults).
+Deliberately not enabled by default: full-cone NAT (the real `kmod-nft-fullcone`
+package is included because firewall4 provides it, but H5000M defaults set
+`fullcone=0` and `fullcone6=0` until PPE compatibility is separately proven).
+EHT160 wireless tuning is also not forced; the firmware keeps stock wireless
+runtime defaults.
 
 A read-only `/usr/bin/h5000m-audit` reports board, Wi-Fi/WED, HNAT/PPE, flow-offload, USB/QMI, BBR, OpenClash and fan state. The first-boot defaults request fw4 software and hardware flow offload; this is only configuration. Runtime proof requires driver binding plus increasing HNAT/PPE flow counters under eligible traffic.
 

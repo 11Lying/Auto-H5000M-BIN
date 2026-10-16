@@ -231,8 +231,16 @@ apply_patches() {
 	[ -f "$SOURCE_DIR/package/kernel/mt76/Makefile" ] || die "could not stage vendored mt76 package"
 	log "staged vendored official mt76 package (MT7992 Wi-Fi)"
 
-	# 970 (kernel driver) + 971 (early autoload) + 972 (board DTS overlay).
-	for p in 971-hwmon-pwmfan-boot-autoload.patch 972-h5000m-fan-boot-duty.patch 973-h5000m-hnat-node.patch; do
+	# 970 (kernel driver) + 971 (early autoload) + 972 (board DTS overlay)
+	# + 973 (Ethernet PDMA IRQs and HNAT phandle) + 974 (HNAT safe probe
+	# cleanup) + 975 (MT7996 WED default) + 976 (HNAT module autoload).
+	for p in \
+		971-hwmon-pwmfan-boot-autoload.patch \
+		972-h5000m-fan-boot-duty.patch \
+		973-h5000m-hnat-node.patch \
+		974-mtk-hnat-safe-probe-cleanup.patch \
+		975-mt76-mt7996-wed-default.patch \
+		976-mtkhnat-autoload.patch; do
 		[ -f "$ROOT_DIR/patches/$p" ] || die "missing patch $p"
 		if patch -d "$SOURCE_DIR" -p1 --dry-run --forward --silent < "$ROOT_DIR/patches/$p" >/dev/null 2>&1; then
 			patch -d "$SOURCE_DIR" -p1 --forward --silent < "$ROOT_DIR/patches/$p" \
@@ -365,7 +373,7 @@ collect() {
 	# Gate the published image, not just source config. In particular, this
 	# catches a compiled-but-unpackaged HNAT .ko before firmware is uploaded.
 	for pkg in kmod-mediatek_hnat kmod-nf-conntrack kmod-nf-nat kmod-nf-flow \
-		   kmod-tcp-bbr kmod-usb3 kmod-qmi_wwan_q kmod-mt7996e hnat-detect; do
+		   kmod-nft-fullcone kmod-tcp-bbr kmod-usb3 kmod-qmi_wwan_q kmod-mt7996e hnat-detect; do
 		grep -q "^${pkg} - " "$manifest" || die "required acceleration/data-path package absent from image manifest: $pkg"
 	done
 	find "$SOURCE_DIR/bin" -type f -name 'kmod-mediatek_hnat-*.apk' -print -quit | grep -q . \
@@ -383,7 +391,7 @@ collect() {
 		echo "target=mediatek/filogic"
 		echo "kernel=$(sed -n 's/^LINUX_VERSION-6\.12 = //p' "$SOURCE_DIR/target/linux/generic/kernel-6.12")"
 		echo "wifi_stack=official mt76 (kmod-mt7996e + kmod-mt7992-23-firmware)"
-		echo "fan_patches=970+971+972 applied; upstream thermal trips retained"
+		echo "fan_patches=970+971+972+973+974+975+976 applied; upstream thermal trips retained"
 		echo "acceleration=HNAT module packaged; nft flow HW+SW; IPv6; USB-QMI; BBR; MT76/WED3.1"
 		echo "--- feeds ---"
 		grep '^src-git' "$SOURCE_DIR/feeds.conf.default"

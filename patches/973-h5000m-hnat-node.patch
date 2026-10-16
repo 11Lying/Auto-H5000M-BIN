@@ -1,6 +1,21 @@
---- a/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts	2026-10-15 03:54:36.472369734 +0000
-+++ b/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts	2026-10-15 03:57:39.541732668 +0000
-@@ -243,3 +243,22 @@
+--- a/target/linux/mediatek/dts/mt7987.dtsi
++++ b/target/linux/mediatek/dts/mt7987.dtsi
+@@ -1075,7 +1075,11 @@
+ 			compatible = "mediatek,mt7987-eth";
+ 			reg = <0 0x15100000 0 0x80000>,
+ 			      <0 0x15400000 0 0x20000>;
+-			interrupts = <GIC_SPI 196 IRQ_TYPE_LEVEL_HIGH>,
++			interrupts = <GIC_SPI 189 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 190 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 191 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 192 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 196 IRQ_TYPE_LEVEL_HIGH>,
+ 				     <GIC_SPI 197 IRQ_TYPE_LEVEL_HIGH>,
+ 				     <GIC_SPI 198 IRQ_TYPE_LEVEL_HIGH>,
+ 				     <GIC_SPI 199 IRQ_TYPE_LEVEL_HIGH>;
+--- a/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
++++ b/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
+@@ -251,3 +251,25 @@
  	pinctrl-0 = <&uart0_pins>;
  	status = "okay";
  };
@@ -9,11 +24,14 @@
 +	hnat: hnat@15100000 {
 +		compatible = "mediatek,mtk-hnat_v5";
 +		reg = <0 0x15100000 0 0x80000>;
-+		interrupts = <0 0xc6 4>;
++		interrupts = <GIC_SPI 198 IRQ_TYPE_LEVEL_HIGH>;
 +		resets = <&ethsys 0>;
 +		reset-names = "mtketh";
++		/* Required by the HNAT probe to obtain mtk_eth's drvdata. */
++		mtketh-soc = <&eth>;
 +		mtketh-wan = "eth1";
 +		mtketh-lan = "eth0";
++		/* hnat-detect replaces these runtime names when the topology is up. */
 +		mtketh-lan2 = "hnat";
 +		mtketh-ppd = "hnat";
 +		mtketh-max-gmac = <2>;

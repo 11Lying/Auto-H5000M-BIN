@@ -107,13 +107,28 @@ if [ -f "$DTS" ]; then
 	pass "official DTS present"
 	# The only permitted local change is the documented boot-duty block.
 	if grep -q 'pwm-fan,boot-duty = <89>' "$DTS" && grep -q 'compatible = "mediatek,mt76"' "$DTS"; then
-	pass "official DTS retained; only reviewed fan boot-duty overlay is present"
+	pass "official DTS retained; only reviewed fan and HNAT overlays are present"
 else
 	fail "H5000M DTS fan handover or mt76 binding missing"
 fi
 else
 	fail "official DTS missing at $DTS"
 fi
+
+# Ethernet IRQ resources must match the RSS/PDMA driver in this pinned tree:
+# four PDMA resources (189..192) followed by four FE resources (196..199).
+ETH_DTS="$SRC/target/linux/mediatek/dts/mt7987.dtsi"
+for irq in 189 190 191 192 196 197 198 199; do
+  grep -q "GIC_SPI $irq IRQ_TYPE_LEVEL_HIGH" "$ETH_DTS" \
+    || fail "MT7987 Ethernet IRQ $irq missing from final DTS"
+done
+if grep -q '#define MTK_PDMA_IRQ_NUM.*(4)' "$SRC/target/linux/mediatek/patches-6.12/999-eth-09-mtk_eth_soc-add-rss-support.patch" && \
+   grep -q 'MTK_PDMA_IRQ_NUM + i' "$SRC/target/linux/mediatek/patches-6.12/999-eth-09-mtk_eth_soc-add-rss-support.patch"; then
+  pass "Ethernet DT has the 4+4 IRQ layout required by the pinned RSS/PDMA patch"
+else
+  fail "RSS/PDMA IRQ acquisition patch is missing or changed"
+fi
+
 
 # ---------------------------------------------------------------------------
 sect "4b. build cost guards"
@@ -168,9 +183,9 @@ if [ -d "$SRC/package/mtk" ]; then
 else
 	pass "no MTK vendor feed present"
 fi
-extra="$(ls "$ROOT_DIR/patches" 2>/dev/null | grep -vE '^(970|971|972|973)-' || true)"
+extra="$(ls "$ROOT_DIR/patches" 2>/dev/null | grep -vE '^(970|971|972|973|974|975|976)-' || true)"
 if [ -z "$extra" ]; then
-	pass "patches/ contains only the documented patches (970, 971, 972, 973)"
+	pass "patches/ contains only the documented patches (970..976)"
 else
 	fail "unexpected patch files: $(echo "$extra" | tr '\n' ' ')"
 fi
@@ -183,10 +198,10 @@ if [ -f "$SRC/package/kernel/mt76/Makefile" ]; then
 else
 	fail "mt76 package missing: $SRC/package/kernel/mt76/Makefile"
 fi
-if [ -f "$SRC/package/kernel/mt76/patches/110-mtk-wed-v3.1-compat.patch" ]; then
-	pass "MTK WED 3.1 compatibility patch staged"
+if grep -q 'MODPARAMS.mt7996e:=wed_enable=Y' "$SRC/package/kernel/mt76/Makefile"; then
+  pass "MT7996E WED is enabled through the generated module-parameter file"
 else
-	fail "MTK WED 3.1 compatibility patch missing"
+  fail "MT7996E WED module parameter missing"
 fi
 
 # ---------------------------------------------------------------------------
@@ -294,14 +309,28 @@ grep -qx 'CONFIG_IPV6=y' "$KCFG" \
 for sym in PACKAGE_kmod-nf-conntrack PACKAGE_kmod-nf-nat PACKAGE_kmod-nf-flow; do
   cfg_has "$sym" && pass "$sym selected for HNAT/nft flow offload" || fail "$sym missing"
 done
+cfg_has PACKAGE_kmod-nft-fullcone && pass "real nft full-cone module is packaged but disabled by default" || fail "nft full-cone package missing"
 cfg_has PACKAGE_hnat-detect \
   && pass "HNAT interface detector selected" \
   || fail "hnat-detect missing"
 if grep -q 'compatible = "mediatek,mtk-hnat_v5"' "$DTS" && \
+   grep -q 'mtketh-soc = <&eth>;' "$DTS" && \
    grep -q 'ext-devices-prefix = "usb", "wwan"' "$DTS"; then
-  pass "H5000M HNAT v5 DTS node includes USB/WWAN external-interface matching"
+  pass "H5000M HNAT v5 DTS has Ethernet phandle and USB/WWAN external matching"
 else
-  fail "H5000M HNAT v5 DTS/USB-WWAN device matching missing"
+  fail "H5000M HNAT v5 DTS phandle/external-device matching missing"
+fi
+HNAT_SRC="$SRC/target/linux/mediatek/files-6.12/drivers/net/ethernet/mediatek/mtk_hnat/hnat.c"
+if grep -q 'if (hnat_priv && hnat_priv->fe_base)' "$HNAT_SRC" && \
+   grep -q 'hnat_priv = NULL;' "$HNAT_SRC"; then
+  pass "HNAT early-probe cleanup guards unmapped MMIO and clears global state"
+else
+  fail "HNAT early-probe cleanup guard missing"
+fi
+if grep -q 'AUTOLOAD:=$(call AutoLoad,90,mtkhnat)' "$HNAT_PKG_MK"; then
+  pass "HNAT module is automatically loaded only after the built-in Ethernet driver"
+else
+  fail "HNAT module autoload rule missing"
 fi
 HNAT_DETECT_SRC="$(find "$SRC" -path '*/hnat-detect/files/usr/share/ucode/hnat/detect.uc' -print -quit)"
 if [ -n "$HNAT_DETECT_SRC" ] && grep -q 'usb|wwan|eth' "$HNAT_DETECT_SRC"; then
@@ -423,10 +452,11 @@ for f in "$ROOT_DIR/package/h5000m-fancontrol/files/etc/config/fancontrol" "$ROO
   [ -s "$f" ] || fail "missing H5000M runtime file: $f"
 done
 OFFLOAD_DEFAULT="$ROOT_DIR/package/h5000m-fancontrol/files/etc/uci-defaults/90-h5000m-hw-offload"
-if grep -q "flow_offloading='1'" "$OFFLOAD_DEFAULT" && grep -q "flow_offloading_hw='1'" "$OFFLOAD_DEFAULT"; then
-  pass "fw4 software+hardware flow-offload defaults enabled"
+if grep -q "flow_offloading='1'" "$OFFLOAD_DEFAULT" && grep -q "flow_offloading_hw='1'" "$OFFLOAD_DEFAULT" && \
+   grep -q "fullcone='0'" "$OFFLOAD_DEFAULT" && grep -q "fullcone6='0'" "$OFFLOAD_DEFAULT"; then
+  pass "fw4 HW/SW flow-offload defaults enabled; full-cone defaults explicitly disabled"
 else
-  fail "fw4 software+hardware flow-offload defaults incomplete"
+  fail "fw4 offload/full-cone defaults incomplete"
 fi
 if grep -rqE '192\.168\.88\.1' "$ROOT_DIR/config" "$ROOT_DIR/scripts" \
 	"$ROOT_DIR/patches" 2>/dev/null; then
