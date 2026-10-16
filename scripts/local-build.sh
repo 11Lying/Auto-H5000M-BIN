@@ -95,38 +95,94 @@ log()  { printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 warn() { printf '\n[%s] WARNING: %s\n' "$(date '+%H:%M:%S')" "$*" >&2; }
 die()  { printf '::error::H5000M build: %s\n' "$*" >&2; printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
+# Refuse to mutate an existing checkout whose state is not fully understood.
+# In particular, do not treat an existing non-Git directory as a disposable
+# clone target and do not hide a user's work with checkout/reset/clean/cp.
+assert_git_tree_clean() {
+	local dir="$1" label="${2:-$1}" dirty
+	[ -e "$dir/.git" ] || return 0
+	dirty="$(git -C "$dir" status --porcelain --untracked-files=all 2>/dev/null || true)"
+	[ -z "$dirty" ] || die "$label has uncommitted changes; refusing to overwrite or switch it\n$dirty"
+}
+
+stage_file_safely() {
+	local src="$1" dst="$2"
+	[ -f "$src" ] || die "missing staging source: $src"
+	if [ -e "$dst" ] || [ -L "$dst" ]; then
+		[ -f "$dst" ] || die "refusing to replace non-file: $dst"
+		cmp -s "$src" "$dst" || die "destination exists and differs; refusing to overwrite: $dst"
+		return 0
+	fi
+	mkdir -p "$(dirname "$dst")"
+	cp -f "$src" "$dst" || die "could not stage $dst"
+}
+
+stage_tree_safely() {
+	local src="$1" dst="$2"
+	[ -d "$src" ] || die "missing staging directory: $src"
+	if [ -e "$dst" ] || [ -L "$dst" ]; then
+		[ -d "$dst" ] || die "refusing to replace non-directory: $dst"
+		command -v diff >/dev/null 2>&1 || die "diff is required to compare an existing staging directory"
+		diff -qr "$src" "$dst" >/dev/null 2>&1 \
+			|| die "destination exists and differs; refusing to overwrite: $dst"
+		return 0
+	fi
+	mkdir -p "$(dirname "$dst")"
+	cp -a "$src" "$dst" || die "could not stage directory $dst"
+}
+
+prepare_empty_output_dir() {
+	local dir="$1"
+	if [ -e "$dir" ] || [ -L "$dir" ]; then
+		[ -d "$dir" ] || die "refusing to replace non-directory output path: $dir"
+		if find "$dir" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+			die "output directory is non-empty; refusing to delete it: $dir"
+		fi
+	else
+		mkdir -p "$dir"
+	fi
+}
+
 # ---------------------------------------------------------------------------
 # 1. source
 # ---------------------------------------------------------------------------
 clone_source() {
-	if [ -d "$SOURCE_DIR/.git" ]; then
-		log "source tree already present: $SOURCE_DIR"
-	else
-		log "cloning $REPO_URL @ $REPO_REF"
-		local ok=false
-		local prefix
-		for prefix in "" $GITHUB_PROXY_PREFIXES; do
-			rm -rf "$SOURCE_DIR"
-			if git clone --depth "$GIT_CLONE_DEPTH" --branch "$REPO_REF" \
-				"${prefix}${REPO_URL}" "$SOURCE_DIR"; then ok=true; break; fi
-			warn "clone failed via '${prefix:-direct}', trying next"
-		done
-		$ok || die "could not clone $REPO_URL"
-	fi
+	local head kv parent tmp prefix ok=false
 
-	# For branch-based sources (chasey-dev 25.12), checkout the pinned commit.
-	# The shallow clone only has the branch tip; fetch the pinned commit.
-	local head
-	head="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
-	if [ "$head" != "$REPO_COMMIT" ]; then
-		log "fetching pinned commit $REPO_COMMIT"
-		git -C "$SOURCE_DIR" fetch --depth 1 origin "$REPO_COMMIT" || \
-			git -C "$SOURCE_DIR" fetch origin "$REPO_COMMIT"
-		git -C "$SOURCE_DIR" checkout "$REPO_COMMIT" || \
-			die "could not checkout pinned commit $REPO_COMMIT"
+	if [ -e "$SOURCE_DIR" ] || [ -L "$SOURCE_DIR" ]; then
+		[ -d "$SOURCE_DIR/.git" ] || die "source path exists but is not a Git repository; refusing to delete it: $SOURCE_DIR"
+		assert_git_tree_clean "$SOURCE_DIR" "source tree $SOURCE_DIR"
 		head="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+		[ "$head" = "$REPO_COMMIT" ] || die "source tree is at $head, expected $REPO_COMMIT; refusing checkout/switch"
+		log "using existing clean source tree: $SOURCE_DIR @ $head"
+	else
+		parent="$(dirname "$SOURCE_DIR")"
+		[ -d "$parent" ] || die "source parent does not exist: $parent"
+		tmp="$(mktemp -d "${SOURCE_DIR}.clone.XXXXXX")" || die "could not create a private clone directory"
+		# The temporary directory is ours; the user-selected SOURCE_DIR is never
+		# removed. A failed attempt is cleaned only from this private directory.
+		for prefix in "" $GITHUB_PROXY_PREFIXES; do
+			rm -rf "$tmp/tree"
+			if ! git clone --depth "$GIT_CLONE_DEPTH" --branch "$REPO_REF" \
+				"${prefix}${REPO_URL}" "$tmp/tree"; then
+				warn "clone failed via '${prefix:-direct}', trying next"
+				continue
+			fi
+			# Pinning a fresh clone is safe because the clone is private and has
+			# not yet been exposed as SOURCE_DIR. Existing trees never take this path.
+			if ! git -C "$tmp/tree" fetch --depth 1 origin "$REPO_COMMIT"; then
+				git -C "$tmp/tree" fetch origin "$REPO_COMMIT" || continue
+			fi
+			git -C "$tmp/tree" checkout --detach "$REPO_COMMIT" || continue
+			mv "$tmp/tree" "$SOURCE_DIR" || { rm -rf "$tmp"; die "could not install the private clone at $SOURCE_DIR"; }
+			ok=true
+			break
+		done
+		rm -rf "$tmp"
+		$ok || die "could not clone $REPO_URL"
+		head="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+		[ "$head" = "$REPO_COMMIT" ] || die "expected commit $REPO_COMMIT, got $head"
 	fi
-	[ "$head" = "$REPO_COMMIT" ] || die "expected commit $REPO_COMMIT, got $head"
 
 	# Persistent compiler cache. Local builds use the source tree by default;
 	# CI may point CCACHE_DIR at its cache mount. Never clean this directory.
@@ -141,7 +197,6 @@ clone_source() {
 	command -v ccache >/dev/null 2>&1 && ccache -M "$CCACHE_MAXSIZE" >/dev/null 2>&1 || true
 	log "ccache directory: $CCACHE_DIR (max $CCACHE_MAXSIZE)"
 
-	local kv
 	kv="$(sed -n 's/^LINUX_VERSION-6\.12 = //p' \
 		"$SOURCE_DIR/target/linux/generic/kernel-6.12" 2>/dev/null || true)"
 	log "source: $REPO_REF @ $head (kernel ${kv:-unknown})"
@@ -176,6 +231,13 @@ prepare_feeds() {
 }
 
 run_feeds() {
+	# Feeds are ignored by the source repository, so check their own Git
+	# worktrees explicitly before scripts/feeds is allowed to update them.
+	local feed
+	for feed in "$SOURCE_DIR"/feeds/*; do
+		[ -e "$feed/.git" ] || continue
+		assert_git_tree_clean "$feed" "feed checkout $feed"
+	done
 	if [ "$SKIP_FEEDS_UPDATE" = true ] && [ -d "$SOURCE_DIR/feeds/luci" ]; then
 		log "reusing existing feeds tree"
 	else
@@ -195,8 +257,8 @@ apply_patches() {
 	# kernel patch directory, the kernel build applies it with -p1.
 	dir="$SOURCE_DIR/target/linux/mediatek/patches-6.12"
 	[ -d "$dir" ] || die "missing $dir"
-	cp -f "$ROOT_DIR/patches/970-pwm-fan-boot-duty.patch" "$dir/" \
-		|| die "could not stage kernel patch"
+	stage_file_safely "$ROOT_DIR/patches/970-pwm-fan-boot-duty.patch" \
+		"$dir/970-pwm-fan-boot-duty.patch"
 	log "staged target/linux/mediatek/patches-6.12/970-pwm-fan-boot-duty.patch"
 	# HNAT is selected as CONFIG_PACKAGE_kmod-mediatek_hnat in the seed.
 	# This is essential: adding CONFIG_NET_MEDIATEK_HNAT to the kernel fragment
@@ -215,8 +277,10 @@ apply_patches() {
 	fi
 	log "HNAT selected as packaged module via CONFIG_PACKAGE_kmod-mediatek_hnat"
 	# Include the maintained userspace controller and read-only audit utility.
-	rm -rf "$SOURCE_DIR/package/h5000m-fancontrol"
-	cp -a "$ROOT_DIR/package/h5000m-fancontrol" "$SOURCE_DIR/package/h5000m-fancontrol"
+	# An existing destination must be byte-for-byte the same staged package;
+	# never rm -rf a directory that the caller may have supplied.
+	stage_tree_safely "$ROOT_DIR/package/h5000m-fancontrol" \
+		"$SOURCE_DIR/package/h5000m-fancontrol"
 	log "staged H5000M fan-control package"
 
 	# The chasey-dev 25.12 base does not ship package/kernel/mt76, while the
@@ -225,21 +289,18 @@ apply_patches() {
 	# MT7992 firmware are actually selected and installed in the image.
 	[ -f "$ROOT_DIR/vendor/mt76/Makefile" ] || die "missing vendored mt76 package"
 	[ -f "$ROOT_DIR/vendor/mt76/patches/110-mtk-wed-v3.1-compat.patch" ] || die "missing MTK WED 3.1 compatibility patch"
-	rm -rf "$SOURCE_DIR/package/kernel/mt76"
-	mkdir -p "$SOURCE_DIR/package/kernel"
-	cp -a "$ROOT_DIR/vendor/mt76" "$SOURCE_DIR/package/kernel/mt76"
+	stage_tree_safely "$ROOT_DIR/vendor/mt76" "$SOURCE_DIR/package/kernel/mt76"
 	[ -f "$SOURCE_DIR/package/kernel/mt76/Makefile" ] || die "could not stage vendored mt76 package"
 	log "staged vendored official mt76 package (MT7992 Wi-Fi)"
 
 	# 970 (kernel driver) + 971 (early autoload) + 972 (board DTS overlay)
 	# + 973 (Ethernet PDMA IRQs and HNAT phandle) + 974 (HNAT safe probe
-	# cleanup) + 975 (MT7996 WED default) + 976 (HNAT module autoload).
+	# cleanup) + 976 (HNAT module autoload).
 	for p in \
 		971-hwmon-pwmfan-boot-autoload.patch \
 		972-h5000m-fan-boot-duty.patch \
 		973-h5000m-hnat-node.patch \
 		974-mtk-hnat-safe-probe-cleanup.patch \
-		975-mt76-mt7996-wed-default.patch \
 		976-mtkhnat-autoload.patch; do
 		[ -f "$ROOT_DIR/patches/$p" ] || die "missing patch $p"
 		if patch -d "$SOURCE_DIR" -p1 --dry-run --forward --silent < "$ROOT_DIR/patches/$p" >/dev/null 2>&1; then
@@ -281,10 +342,19 @@ PY
 	# Disable autoreconf for Ruby; use the pre-generated configure script.
 	local ruby_makefile="$SOURCE_DIR/feeds/packages/lang/ruby/Makefile"
 	if [ -f "$ruby_makefile" ]; then
-		# Remove any existing PKG_FIXUP line and ensure autoreconf is disabled
-		sed -i '/^PKG_FIXUP:=/d' "$ruby_makefile"
-		# Add explicit empty PKG_FIXUP to prevent autoreconf
-		echo "PKG_FIXUP:=" >> "$ruby_makefile"
+		python3 - "$ruby_makefile" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+old = [line for line in s.splitlines(True) if line.startswith("PKG_FIXUP:=")]
+new = "PKG_FIXUP:=\n"
+if s.count("PKG_FIXUP:=") == 1 and "PKG_FIXUP:=\n" in s:
+    print("ruby autoreconf guard already applied")
+elif len(old) == 1:
+    p.write_text(s.replace(old[0], new, 1))
+else:
+    raise SystemExit(f"refusing ambiguous ruby PKG_FIXUP edit: {len(old)} matching lines")
+PY
 		log "disabled autoreconf for ruby (broken configure.ac in 3.4.9)"
 	fi
 }
@@ -294,7 +364,16 @@ PY
 # ---------------------------------------------------------------------------
 make_config() {
 	[ -s "$CONFIG_FILE" ] || die "missing seed config $CONFIG_FILE"
-	cp -f "$CONFIG_FILE" "$SOURCE_DIR/.config"
+	# .config is ignored by the source Git repository, so it needs its own
+	# overwrite guard. A differing existing config is user data, not disposable
+	# build output.
+	if [ -e "$SOURCE_DIR/.config" ] || [ -L "$SOURCE_DIR/.config" ]; then
+		[ -f "$SOURCE_DIR/.config" ] || die "refusing to replace non-file .config"
+		cmp -s "$CONFIG_FILE" "$SOURCE_DIR/.config" \
+			|| die "existing $SOURCE_DIR/.config differs; refusing to overwrite it"
+	else
+		cp -f "$CONFIG_FILE" "$SOURCE_DIR/.config"
+	fi
 	log "seed .config installed, running make defconfig"
 	( cd "$SOURCE_DIR" && make defconfig ) || die "make defconfig failed"
 }
@@ -350,8 +429,9 @@ run_libffi_only() {
 # 6. collect
 # ---------------------------------------------------------------------------
 collect() {
-	rm -rf "$ARTIFACTS_DIR"
-	mkdir -p "$ARTIFACTS_DIR"
+	# Never delete a caller's artifacts directory. Use a new ARTIFACTS_DIR for
+	# another run, or empty the directory explicitly outside this script.
+	prepare_empty_output_dir "$ARTIFACTS_DIR"
 
 	local tgt="$SOURCE_DIR/bin/targets/mediatek/filogic"
 	[ -d "$tgt" ] || die "no image directory $tgt"
@@ -391,7 +471,7 @@ collect() {
 		echo "target=mediatek/filogic"
 		echo "kernel=$(sed -n 's/^LINUX_VERSION-6\.12 = //p' "$SOURCE_DIR/target/linux/generic/kernel-6.12")"
 		echo "wifi_stack=official mt76 (kmod-mt7996e + kmod-mt7992-23-firmware)"
-		echo "fan_patches=970+971+972+973+974+975+976 applied; upstream thermal trips retained"
+		echo "fan_patches=970+971+972+973+974+976 applied; upstream thermal trips retained"
 		echo "acceleration=HNAT module packaged; nft flow HW+SW; IPv6; USB-QMI; BBR; MT76/WED3.1"
 		echo "--- feeds ---"
 		grep '^src-git' "$SOURCE_DIR/feeds.conf.default"

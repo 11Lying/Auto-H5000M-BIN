@@ -6,8 +6,7 @@
 # per-second redundant re-writes. Accepts the stock "-M <mode>" arg (ignored;
 # the active curve is always 'option curve', matching stock behaviour).
 #
-# Control loop: read temp -> curve -> up=sustained-rise debounce (up_delay,
-# with an emergency bypass above up_now_temp) / down=hysteresis+delay ->
+# Control loop: read temp -> curve -> up=immediate / down=hysteresis+delay ->
 # write only if target != current PWM -> sleep INTERVAL.
 #
 # Because the kernel step_wise governor drives the SAME pwm-fan cooling device
@@ -41,14 +40,6 @@ CURVE=$(uget curve)
 INTERVAL=$(uget interval);   is_num "$INTERVAL" || INTERVAL=5
 HYST=$(uget hysteresis);     is_num "$HYST"     || HYST=3
 DOWNDELAY=$(uget down_delay);is_num "$DOWNDELAY" || DOWNDELAY=30
-# up_delay: a HIGHER fan demand must persist this many seconds before we raise
-# the speed, so brief CPU/WiFi spikes don't instantly spin the fan up. The fan
-# only ramps once the temperature stays elevated.
-# up_now_temp: safety bypass -- if the effective temperature reaches this value
-# the fan is raised immediately regardless of up_delay (so a real thermal climb
-# is never held back).
-UPDELAY=$(uget up_delay);    is_num "$UPDELAY"  || UPDELAY=15
-UPNOW=$(uget up_now_temp);   is_num "$UPNOW"    || UPNOW=80
 MINPWM=$(uget min_pwm);      is_num "$MINPWM"   || MINPWM=20
 SAFEPWM=$(uget fail_pwm);    is_num "$SAFEPWM"  || SAFEPWM=$(( MAXPWM * 60 / 100 ))
 
@@ -200,10 +191,9 @@ trap 'release_governor; log "stopped"; exit 0' TERM INT
 trap 'release_governor' EXIT
 
 take_governor
-log "started (interval=${INTERVAL}s hysteresis=${HYST}C up_delay=${UPDELAY}s up_now=${UPNOW}C down_delay=${DOWNDELAY}s min_pwm=${MINPWM} safe_pwm=${SAFEPWM} governor=$(cat "$POLICY_FILE" 2>/dev/null))"
+log "started (interval=${INTERVAL}s hysteresis=${HYST}C down_delay=${DOWNDELAY}s min_pwm=${MINPWM} safe_pwm=${SAFEPWM} governor=$(cat "$POLICY_FILE" 2>/dev/null))"
 
 TARGET=""
-UP_SINCE=0
 DOWN_SINCE=0
 FAILS=0
 INFAIL=0
@@ -229,27 +219,11 @@ while :; do
 		[ "$INFAIL" = 1 ] && { log "temperature reading recovered (${c}C)"; INFAIL=0; }
 		FAILS=0
 		req=$(curve_pwm "$c")
-		if [ -z "$TARGET" ] || [ "$req" -eq "$TARGET" ]; then
-			# demand unchanged: hold, clear both timers
-			TARGET=$req; UP_SINCE=0; DOWN_SINCE=0
-		elif [ "$req" -gt "$TARGET" ]; then
-			# up-shift demand: must stay elevated for up_delay before we
-			# actually raise, so a brief spike doesn't bump the fan.
-			# Emergency bypass: if the chip is genuinely hot, raise now.
-			DOWN_SINCE=0
-			if [ "$c" -ge "$UPNOW" ]; then
-				TARGET=$req; UP_SINCE=0
-			else
-				now=$(date +%s)
-				[ "$UP_SINCE" = 0 ] && UP_SINCE=$now
-				if [ $(( now - UP_SINCE )) -ge "$UPDELAY" ]; then
-					TARGET=$req; UP_SINCE=0
-				fi
-				# else: hold the lower TARGET until the rise persists
-			fi
+		if [ -z "$TARGET" ] || [ "$req" -ge "$TARGET" ]; then
+			# up-shift (or equal): respond immediately, cancel spin-down timer
+			TARGET=$req; DOWN_SINCE=0
 		else
 			# down-shift demand: apply hysteresis, then delay
-			UP_SINCE=0
 			cand=$(curve_pwm $(( c + HYST )))
 			if [ "$cand" -ge "$TARGET" ]; then
 				DOWN_SINCE=0                      # inside hysteresis band -> hold

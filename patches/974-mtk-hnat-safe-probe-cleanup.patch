@@ -1,16 +1,142 @@
 --- a/target/linux/mediatek/files-6.12/drivers/net/ethernet/mediatek/mtk_hnat/hnat.c
 +++ b/target/linux/mediatek/files-6.12/drivers/net/ethernet/mediatek/mtk_hnat/hnat.c
-@@ -1838,8 +1838,16 @@
+@@ -112,26 +112,40 @@
+ 
+ void cr_set_bits(void __iomem *reg, u32 bs)
+ {
+-	u32 val = readl(reg);
++	u32 val;
++
++	if (!reg || !bs)
++		return;
+ 
++	val = readl(reg);
+ 	val |= bs;
+ 	writel(val, reg);
+ }
+ 
+ void cr_clr_bits(void __iomem *reg, u32 bs)
+ {
+-	u32 val = readl(reg);
++	u32 val;
+ 
++	if (!reg || !bs)
++		return;
++
++	val = readl(reg);
+ 	val &= ~bs;
+ 	writel(val, reg);
+ }
+ 
+ void cr_set_field(void __iomem *reg, u32 field, u32 val)
+ {
+-	unsigned int tv = readl(reg);
++	u32 tv;
++	unsigned int shift;
++
++	if (!reg || !field)
++		return;
+ 
++	shift = ffs((unsigned int)field) - 1;
++	tv = readl(reg);
+ 	tv &= ~field;
+-	tv |= ((val) << (ffs((unsigned int)field) - 1));
++	tv |= ((val) << shift);
+ 	writel(tv, reg);
+ }
+ 
+@@ -620,7 +634,7 @@
+ 	int index;
+ 
+ 	spin_lock_bh(&hnat_priv->flow_entry_lock);
+-	for (index = 0; index < DEF_ETRY_NUM / 4; index++) {
++	for (index = 0; index < hnat_priv->foe_etry_num / 4; index++) {
+ 		head = &hnat_priv->foe_flow[ppe_id][index];
+ 		hlist_for_each_entry_safe(flow_entry, n, head, list) {
+ 			hnat_flow_entry_delete(flow_entry);
+@@ -639,7 +653,7 @@
+ 
+ 	spin_lock_bh(&hnat_priv->flow_entry_lock);
+ 	for (i = 0; i < CFG_PPE_NUM; i++) {
+-		for (index = 0; index < DEF_ETRY_NUM / 4; index++) {
++		for (index = 0; index < hnat_priv->foe_etry_num / 4; index++) {
+ 			head = &hnat_priv->foe_flow[i][index];
+ 			hlist_for_each_entry_safe(flow_entry, n, head, list) {
+ 				/* If the entry has not been used for 30 seconds, teardown it. */
+@@ -666,7 +680,7 @@
+ 
+ static void hnat_flow_entry_teardown_disable(void)
+ {
+-	cancel_delayed_work(&_hnat_flow_entry_teardown_work);
++	cancel_delayed_work_sync(&_hnat_flow_entry_teardown_work);
+ }
+ 
+ static int is_cah_ctrl_request_done(u32 ppe_id)
+@@ -1592,6 +1606,7 @@
+ 	int i;
+ 	int err = 0;
+ 	int index = 0;
++	int ppe_started = 0;
+ 	struct resource *res;
+ 	const char *name;
+ 	struct device_node *np;
+@@ -1642,8 +1657,8 @@
+ 	}
+ 
+ 	hnat_priv->eth = platform_get_drvdata(eth_pdev);
++	put_device(&eth_pdev->dev);
+ 	if (!hnat_priv->eth) {
+-		put_device(&eth_pdev->dev);
+ 		err = -EPROBE_DEFER;
+ 		goto err_out2;
+ 	}
+@@ -1734,12 +1749,18 @@
+ 	if (hnat_priv->data->version == MTK_HNAT_V3) {
+ 		/* PPE flow check interrupt registeration for MT7987 */
+ 		hnat_priv->fe_irq2 = platform_get_irq_optional(pdev, 0);
++		if (hnat_priv->fe_irq2 == -EPROBE_DEFER) {
++			err = hnat_priv->fe_irq2;
++			goto err_out2;
++		}
+ 		if (hnat_priv->fe_irq2 >= 0) {
+ 			err = devm_request_irq(hnat_priv->dev, hnat_priv->fe_irq2,
+ 					       hnat_handle_fe_irq2, IRQF_SHARED,
+ 					       dev_name(hnat_priv->dev), hnat_priv);
+-			if (err)
++			if (err) {
+ 				dev_err(&pdev->dev, "Unable to request FE IRQ!\n");
++				goto err_out2;
++			}
+ 		}
+ 	}
+ 
+@@ -1772,6 +1793,7 @@
+ 	spin_lock_init(&hnat_priv->flow_entry_lock);
+ 
+ 	for (i = 0; i < CFG_PPE_NUM; i++) {
++		ppe_started = i + 1;
+ 		err = hnat_start(i);
+ 		if (err)
+ 			goto err_out;
+@@ -1828,8 +1850,8 @@
+ 	return 0;
+ 
+ err_out:
+-	for (i = 0; i < CFG_PPE_NUM; i++)
+-		hnat_stop(i);
++	while (ppe_started > 0)
++		hnat_stop(--ppe_started);
+ err_out1:
+ 	hnat_deinit_debugfs(hnat_priv);
+ 	for (i = 0; i < MAX_EXT_DEVS && hnat_priv->ext_if[i]; i++) {
+@@ -1838,8 +1860,13 @@
  		kfree(ext_entry);
  	}
  err_out2:
 -	for (i = 0; i < MAX_PPE_NUM; i++)
 -		mtk_set_ppe_pse_port_state(i, false);
-+	/*
-+	 * This label is reachable before fe_base/ppe_base are mapped (for
-+	 * example, when the Ethernet phandle or the Ethernet drvdata is not
-+	 * available).  Never touch an MMIO register on an early probe failure.
-+	 */
++	/* This label is reachable before MMIO is mapped. Never touch PPE/FE
++	 * registers on a phandle, drvdata or ioremap failure. */
 +	if (hnat_priv && hnat_priv->fe_base) {
 +		for (i = 0; i < MAX_PPE_NUM; i++)
 +			mtk_set_ppe_pse_port_state(i, false);
@@ -19,3 +145,12 @@
  	return err;
  }
  
+@@ -1871,6 +1898,8 @@
+ 
+ 	if (IS_HQOS_MODE && IS_GMAC1_MODE)
+ 		dev_remove_pack(&mtk_pack_type);
++
++	hnat_priv = NULL;
+ }
+ 
+ static const struct mtk_hnat_data hnat_data_v1 = {

@@ -115,21 +115,55 @@ else
 	fail "official DTS missing at $DTS"
 fi
 
-# Ethernet IRQ resources must match the RSS/PDMA driver in this pinned tree:
-# four PDMA resources (189..192) followed by four FE resources (196..199).
+# Ethernet IRQ resources must match the RSS/PDMA driver in this pinned tree.
+# The RSS patch consumes platform IRQs 0..3 as PDMA, then 4..7 as FE.
 ETH_DTS="$SRC/target/linux/mediatek/dts/mt7987.dtsi"
-for irq in 189 190 191 192 196 197 198 199; do
-  grep -q "GIC_SPI $irq IRQ_TYPE_LEVEL_HIGH" "$ETH_DTS" \
-    || fail "MT7987 Ethernet IRQ $irq missing from final DTS"
-done
-if grep -q '#define MTK_PDMA_IRQ_NUM.*(4)' "$SRC/target/linux/mediatek/patches-6.12/999-eth-09-mtk_eth_soc-add-rss-support.patch" && \
-   grep -q 'MTK_PDMA_IRQ_NUM + i' "$SRC/target/linux/mediatek/patches-6.12/999-eth-09-mtk_eth_soc-add-rss-support.patch"; then
-  pass "Ethernet DT has the 4+4 IRQ layout required by the pinned RSS/PDMA patch"
+RSS_PATCH="$SRC/target/linux/mediatek/patches-6.12/999-eth-09-mtk_eth_soc-add-rss-support.patch"
+expected_irqs="189 190 191 192 196 197 198 199"
+actual_irqs="$(sed -n '/^[[:space:]]*eth: ethernet@15100000 {/,/^[[:space:]]*clocks = /p' "$ETH_DTS" \
+	| grep -oE 'GIC_SPI [0-9]+' | awk '{print $2}' | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
+if [ "$actual_irqs" = "$expected_irqs" ]; then
+	pass "MT7987 Ethernet DT IRQ order is PDMA[0..3]=189..192 and FE[0..3]=196..199"
 else
-  fail "RSS/PDMA IRQ acquisition patch is missing or changed"
+	fail "MT7987 Ethernet DT IRQ order mismatch: expected '$expected_irqs', got '$actual_irqs'"
+fi
+if grep -q '#define MTK_PDMA_IRQ_NUM.*(4)' "$RSS_PATCH" && \
+   grep -q 'eth->irq_pdma\[i\] = platform_get_irq(pdev, i)' "$RSS_PATCH" && \
+   grep -q 'platform_get_irq(pdev, MTK_PDMA_IRQ_NUM + i)' "$RSS_PATCH"; then
+	pass "RSS driver maps the DTS IRQ order as four PDMA followed by four FE resources"
+else
+	fail "RSS/PDMA IRQ acquisition mapping is missing or changed"
+fi
+if grep -q '[[:space:]]eth: ethernet@15100000' "$ETH_DTS" && \
+   grep -q 'mtketh-soc = <&eth>;' "$DTS" && \
+   grep -q '^&eth {' "$DTS" && grep -q '[[:space:]]status = "okay";' "$DTS" && \
+   grep -q '[[:space:]]hnat: hnat@15100000' "$DTS"; then
+	pass "HNAT node references the real enabled Ethernet platform device"
+else
+	fail "HNAT phandle/device-tree node structure is incomplete"
 fi
 
-
+# 973 is intentionally the only expected change to mt7987.dtsi. Compare the
+# final file with a clean pinned source plus exactly that patch, so an unrelated
+# local edit is still rejected instead of being hidden by a blanket exemption.
+expected_dts_dir="$(mktemp -d)"
+mkdir -p "$expected_dts_dir/target/linux/mediatek/dts"
+if git -C "$SRC" show HEAD:target/linux/mediatek/dts/mt7987.dtsi > \
+	"$expected_dts_dir/target/linux/mediatek/dts/mt7987.dtsi" && \
+   git -C "$SRC" show HEAD:target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts > \
+	"$expected_dts_dir/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts" && \
+   patch -d "$expected_dts_dir" -p1 --forward --silent < "$ROOT_DIR/patches/973-h5000m-hnat-node.patch" >/dev/null 2>&1 && \
+   cmp -s "$ETH_DTS" "$expected_dts_dir/target/linux/mediatek/dts/mt7987.dtsi"; then
+	pass "mt7987.dtsi contains exactly the reviewed 973 IRQ change (no unrelated diff)"
+else
+	fail "mt7987.dtsi differs from the pinned source plus the reviewed 973 patch"
+fi
+rm -rf "$expected_dts_dir"
+if git -C "$SRC" diff --quiet -- target/linux/generic/config-6.12; then
+	pass "generic/config-6.12 has no unexpected local modification"
+else
+	fail "generic/config-6.12 has an unexpected local modification"
+fi
 # ---------------------------------------------------------------------------
 sect "4b. build cost guards"
 # bridger is the only package that selects NEED_BPF_TOOLCHAIN on this target.
@@ -153,19 +187,28 @@ if cfg_has PACKAGE_luci-app-qmodem-next; then
 else
 	fail "qmodem-next not selected"
 fi
-for sym in \
-	PACKAGE_luci-app-nikki PACKAGE_luci-app-mosdns PACKAGE_luci-app-homeproxy \
-	PACKAGE_luci-app-passwall PACKAGE_luci-app-passwall2 PACKAGE_luci-app-adguardhome \
-	PACKAGE_luci-app-adblock PACKAGE_luci-app-upnp PACKAGE_luci-app-vlmcsd \
-	PACKAGE_luci-app-dockerman PACKAGE_luci-app-ramfree PACKAGE_luci-app-turboacc-mtk \
-	PACKAGE_luci-app-Airpifanctrl PACKAGE_luci-app-fancontrol PACKAGE_luci-app-eqos-mtk \
-	PACKAGE_luci-app-mtwifi-cfg PACKAGE_luci-app-openclash-dev PACKAGE_luci-app-mwan3 \
-	PACKAGE_luci-app-qmodem PACKAGE_luci-app-modem PACKAGE_modemmanager \
-	PACKAGE_h5000m-kit PACKAGE_kmod-pcie_mhi PACKAGE_kmod-mtk-t7xx \
-	; do
-	cfg_absent "$sym" || fail "unwanted package enabled: $sym"
+unwanted_packages=(
+	PACKAGE_luci-app-nikki PACKAGE_luci-app-mosdns PACKAGE_luci-app-homeproxy
+	PACKAGE_luci-app-passwall PACKAGE_luci-app-passwall2 PACKAGE_luci-app-adguardhome
+	PACKAGE_luci-app-adblock PACKAGE_luci-app-upnp PACKAGE_luci-app-vlmcsd
+	PACKAGE_luci-app-dockerman PACKAGE_luci-app-ramfree PACKAGE_luci-app-turboacc-mtk
+	PACKAGE_luci-app-Airpifanctrl PACKAGE_luci-app-fancontrol PACKAGE_luci-app-eqos-mtk
+	PACKAGE_luci-app-mtwifi-cfg PACKAGE_luci-app-openclash-dev PACKAGE_luci-app-mwan3
+	PACKAGE_luci-app-qmodem PACKAGE_luci-app-modem PACKAGE_modemmanager
+	PACKAGE_h5000m-kit PACKAGE_kmod-pcie_mhi PACKAGE_kmod-mtk-t7xx
+)
+unwanted_found=0
+for sym in "${unwanted_packages[@]}"; do
+	if cfg_absent "$sym"; then
+		:
+	else
+		fail "unwanted package enabled: $sym"
+		unwanted_found=1
+	fi
 done
-pass "checked $(printf '%s\n' PACKAGE_luci-app-nikki PACKAGE_luci-app-mosdns PACKAGE_luci-app-homeproxy PACKAGE_luci-app-modem PACKAGE_modemmanager PACKAGE_h5000m-kit | wc -l)+ unwanted packages: none enabled"
+if [ "$unwanted_found" = 0 ]; then
+	pass "checked ${#unwanted_packages[@]} unwanted packages: none enabled"
+fi
 
 # ---------------------------------------------------------------------------
 sect "6. no leftovers from previous projects"
@@ -183,9 +226,9 @@ if [ -d "$SRC/package/mtk" ]; then
 else
 	pass "no MTK vendor feed present"
 fi
-extra="$(ls "$ROOT_DIR/patches" 2>/dev/null | grep -vE '^(970|971|972|973|974|975|976)-' || true)"
+extra="$(ls "$ROOT_DIR/patches" 2>/dev/null | grep -vE '^(970|971|972|973|974|976)-' || true)"
 if [ -z "$extra" ]; then
-	pass "patches/ contains only the documented patches (970..976)"
+	pass "patches/ contains only the documented patches (970,971,972,973,974,976)"
 else
 	fail "unexpected patch files: $(echo "$extra" | tr '\n' ' ')"
 fi
@@ -198,10 +241,14 @@ if [ -f "$SRC/package/kernel/mt76/Makefile" ]; then
 else
 	fail "mt76 package missing: $SRC/package/kernel/mt76/Makefile"
 fi
-if grep -q 'MODPARAMS.mt7996e:=wed_enable=Y' "$SRC/package/kernel/mt76/Makefile"; then
-  pass "MT7996E WED is enabled through the generated module-parameter file"
+WED_KCFG="$SRC/target/linux/mediatek/filogic/config-6.12"
+if grep -q 'compatible = "mediatek,mt7987-wed"' "$SRC/target/linux/mediatek/dts/mt7987.dtsi" && \
+   grep -q 'interrupts = <GIC_SPI 205 IRQ_TYPE_LEVEL_HIGH>;' "$SRC/target/linux/mediatek/dts/mt7987.dtsi" && \
+   grep -q 'mediatek,wed = <&wed0>;' "$SRC/target/linux/mediatek/dts/mt7987.dtsi" && \
+   grep -qx 'CONFIG_NET_MEDIATEK_SOC_WED=y' "$WED_KCFG"; then
+  pass "MT7987 WED provider/DTS/kernel support is present; no forced module parameter"
 else
-  fail "MT7996E WED module parameter missing"
+  fail "MT7987 WED provider/DTS/kernel support is incomplete"
 fi
 
 # ---------------------------------------------------------------------------
@@ -295,12 +342,16 @@ cfg_has PACKAGE_kmod-mediatek_hnat \
   && pass "HNAT kernel module package selected for the image" \
   || fail "PACKAGE_kmod-mediatek_hnat missing from expanded .config"
 HNAT_PKG_MK="$SRC/package/kernel/linux/modules/netdevices.mk"
+HNAT_DRIVER_MK="$SRC/target/linux/mediatek/files-6.12/drivers/net/ethernet/mediatek/mtk_hnat/Makefile"
 if grep -q 'define KernelPackage/mediatek_hnat' "$HNAT_PKG_MK" && \
+   grep -q 'DEPENDS:=@TARGET_mediatek +kmod-nf-conntrack' "$HNAT_PKG_MK" && \
    grep -q 'CONFIG_NET_MEDIATEK_HNAT' "$HNAT_PKG_MK" && \
-   grep -q 'mtk_hnat/mtkhnat.ko' "$HNAT_PKG_MK"; then
-  pass "HNAT package maps the kernel option to mtkhnat.ko"
+   grep -q 'mtk_hnat/mtkhnat.ko' "$HNAT_PKG_MK" && \
+   grep -q 'AUTOLOAD:=$(call AutoLoad,90,mtkhnat)' "$HNAT_PKG_MK" && \
+   grep -q 'obj-$(CONFIG_NET_MEDIATEK_HNAT).*mtkhnat.o' "$HNAT_DRIVER_MK"; then
+  pass "HNAT Kconfig -> driver Makefile -> KernelPackage -> mtkhnat.ko/autoload chain is present"
 else
-  fail "HNAT KernelPackage recipe missing Kconfig/module mapping"
+  fail "HNAT package/Kconfig/module installation chain is incomplete"
 fi
 KCFG="$SRC/target/linux/mediatek/filogic/config-6.12"
 grep -qx 'CONFIG_IPV6=y' "$KCFG" \
@@ -333,7 +384,7 @@ else
   fail "HNAT module autoload rule missing"
 fi
 HNAT_DETECT_SRC="$(find "$SRC" -path '*/hnat-detect/files/usr/share/ucode/hnat/detect.uc' -print -quit)"
-if [ -n "$HNAT_DETECT_SRC" ] && grep -q 'usb|wwan|eth' "$HNAT_DETECT_SRC"; then
+if [ -n "$HNAT_DETECT_SRC" ] && grep -Eq 'usb|wwan|eth' "$HNAT_DETECT_SRC"; then
   pass "HNAT detector has USB/WWAN external-device handling"
 else
   fail "HNAT detector USB/WWAN path missing"
@@ -376,11 +427,18 @@ if grep -q 'cooling-levels = <0 128 192 255>' "$SRC/target/linux/mediatek/dts/mt
 else
 	fail "official cooling levels were modified"
 fi
-for t in 40000 85000 115000 120000 125000; do
-	grep -q "temperature = <$t>" "$SRC/target/linux/mediatek/dts/mt7987.dtsi" \
-		|| fail "thermal trip $t missing"
+thermal_trips=(40000 85000 115000 117000 120000 125000)
+thermal_found=0
+for t in "${thermal_trips[@]}"; do
+	if grep -q "temperature = <$t>" "$SRC/target/linux/mediatek/dts/mt7987.dtsi"; then
+		thermal_found=$((thermal_found + 1))
+	else
+		fail "thermal trip $t missing"
+	fi
 done
-pass "all six thermal trip points present (40/85/115/117/120/125 C)"
+if [ "$thermal_found" -eq "${#thermal_trips[@]}" ]; then
+	pass "all ${#thermal_trips[@]} thermal trip points present (40/85/115/117/120/125 C)"
+fi
 if grep -rqE '(\[fan\]|fan-no-percent|disable-thermal)' "$ROOT_DIR/patches" 2>/dev/null; then
 	fail "a patch appears to disable thermal handling"
 else
@@ -419,21 +477,19 @@ else
   fail "official MT7987 OPP table is incomplete"
 fi
 if grep -q 'cpu-supply' "$SRC/target/linux/mediatek/dts/mt7987.dtsi"; then fail "official SoC DTS unexpectedly declares cpu-supply"; else pass "official SoC DTS has no CPU voltage regulator"; fi
-if git -C "$SRC" diff --quiet -- target/linux/mediatek/dts/mt7987.dtsi target/linux/generic/config-6.12; then
-  # The only target kernel fragment change is IPv6; HNAT is enabled through
-  # the selected kmod-mediatek_hnat package and its Kconfig dependency.
+if git -C "$SRC" diff --quiet -- target/linux/generic/config-6.12; then
+  # The 973 Ethernet DTS delta is checked exactly in section 4 above. The
+  # generic kernel config must remain untouched; the expected IPv6 fragment is
+  # the only local kernel-config change.
   added="$(git -C "$SRC" diff -- target/linux/mediatek/filogic/config-6.12 | grep '^+' | grep -v '^+++' || true)"
-  # Expected: our added lines (comments + configs + empty lines), nothing else.
   unexpected="$(printf '%s\n' "$added" | grep -vE '^\+# H5000M: ' | grep -vE '^\+CONFIG_IPV6=y$' | grep -vE '^\+$' || true)"
   if [ -z "$unexpected" ]; then
-    pass "official CPUFreq/OPP inputs unmodified (only IPv6 fragment; HNAT enabled via package)"
-  elif [ -z "$added" ]; then
-    pass "official CPUFreq/OPP kernel inputs are unmodified"
+    pass "CPUFreq/OPP upstream inputs unmodified; expected IPv6 fragment only"
   else
-    fail "CPUFreq/OPP upstream kernel inputs were modified (unexpected: $unexpected)"
+    fail "CPUFreq/OPP upstream inputs were modified (unexpected: $unexpected)"
   fi
 else
-  fail "CPUFreq/OPP upstream kernel inputs were modified"
+  fail "generic/config-6.12 has an unexpected CPUFreq/OPP modification"
 fi
 if grep -rqE 'scaling_governor|scaling_setspeed|cpufreq.*performance|CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y'     "$ROOT_DIR/config" "$ROOT_DIR/scripts/local-build.sh" "$ROOT_DIR/patches" 2>/dev/null; then
   fail "a project build input forces a CPU frequency/governor"

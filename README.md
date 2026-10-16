@@ -28,17 +28,22 @@ no closed-source mtwifi tree is selected.
 
 ## Hardware-acceleration repairs
 
-The build applies seven persistent, version-checked changes:
+The build applies six persistent, version-checked changes:
 
 - `970/971/972`: existing fan startup handover only; thermal levels/trips are untouched.
 - `973`: adds the four MT7987 PDMA IRQ resources (189–192) before the four FE
   resources (196–199), matching the pinned RSS driver, and adds the required
   HNAT `mtketh-soc = <&eth>` phandle to the H5000M node.
 - `974`: makes HNAT probe failure cleanup conditional on a successfully mapped
-  `fe_base`, preventing the previously observed NULL MMIO access/panic.
-- `975`: generates `wed_enable=Y` for the MT7996E module. It does not enable
-  RRO; WED activation still depends on a successful Ethernet provider probe.
+  `fe_base`, hard-fails FE IRQ registration errors, and unwinds only PPE
+  instances that reached the start path.
 - `976`: autoloads the packaged HNAT module after built-in Ethernet probing.
+
+WED/RRO is intentionally left at the pinned source default in this build. The
+MT7987 WED provider, IRQ 205, Ethernet `mediatek,wed = <&wed0>` binding and
+kernel WED option remain present, but the mt76 WED module parameter is not
+forced. Actual WED activation is therefore a runtime question, not a build
+claim.
 
 The final image must contain `kmod-mediatek_hnat`, `hnat-detect`, the NF
 conntrack/NAT/flow packages, MT76/MT7992, QMI/QMAP and OpenClash. The build
@@ -64,7 +69,19 @@ The image retains the official H5000M device packages and adds the explicit acce
 
 `hnat-detect` is not the HNAT driver; `kmod-mediatek_hnat` is required in the final image.
 
-The first-boot defaults request fw4 software+hardware flow offload. The HNAT module and USB/WWAN detector are included so eligible direct/NAT flows can use the MT7987 PPE path; the final manifest is checked for both. IPv6 is enabled in the kernel and the MTK HNAT driver has IPv6 flow paths. USB 5-Gbps is the physical link capability; HNAT/PPD is a separate forwarding fast path for eligible QMI/WWAN traffic. Actual acceleration still must be confirmed after flashing from HNAT/PPE counters and IPv4/IPv6/USB throughput tests; a config flag alone is not proof. Auxiliary selected packages include SmartDNS, SQM and irqbalance (SQM is installed but not enabled by default because shaping commonly bypasses hardware offload).
+The first-boot defaults request fw4 software+hardware flow offload. The HNAT
+module and detector are included so the kernel can attempt the MT7987 PPE path
+for eligible Ethernet flows; the final manifest is checked for both. The HNAT
+source has IPv4 NAT/NAPT and MT7987/V3 IPv6 NAT/NAPT flow paths. This does **not**
+prove that USB/QMI/QMAP `wwan0_1` traffic is accepted by the Ethernet PPE: the
+USB modem path is still a separate software/QMI data path, and the detector's
+USB/WWAN names are interface-selection/PPD integration rather than proof of
+hardware offload. OpenClash/Mihomo TUN traffic also remains userspace traffic.
+Actual acceleration must be confirmed after flashing from driver binding,
+HNAT/PPE counters and separate Ethernet/IPv4/IPv6/QMI tests; a config flag or
+module file alone is not proof. Auxiliary selected packages include SmartDNS,
+SQM and irqbalance (SQM is installed but not enabled by default because shaping
+commonly bypasses hardware offload).
 
 ## Community patch audit
 
@@ -91,11 +108,10 @@ available for a separately tested UCI decision.
 The official H5000M DTS remains the base. A narrowly-scoped board overlay adds `pwm-fan,boot-duty = <89>` (about 35% of 255) to prevent the upstream driver's 100% probe duty. The upstream `pwm-fan` driver gets the matching optional-property patch; the stock thermal cooling levels and critical trips are unchanged. A module autoload patch loads pwm-fan in the early module pass.
 
 The local `h5000m-fancontrol` package starts at init priority 15. It applies
-the configured temperature curve, immediately raises PWM only after the
-configured sustained-rise debounce (with an emergency high-temperature bypass),
-delays/hysteresis-protects reductions, takes over the shared CPU thermal
-governor, and restores it on exit. The defaults use the existing H5000M curve,
-5-second sampling, 3°C hysteresis, 3-second down-delay, 15-second up-delay,
+the configured temperature curve, raises PWM immediately when the requested
+curve value increases, delays/hysteresis-protects reductions, takes over the
+shared CPU thermal governor, and restores it on exit. The defaults use the
+existing H5000M curve, 5-second sampling, 3°C hysteresis, 5-second down-delay,
 Wi-Fi temperature with 5°C offset, and a 153/255 safe PWM only if both
 temperature sources fail at startup. Runtime boot timing and acoustic behavior
 still require a post-flash hardware check.
@@ -105,7 +121,7 @@ still require a post-flash hardware check.
 On top of the stock device packages:
 
 - **BBR** (`kmod-tcp-bbr`) — set as default at first boot via uci-defaults (`91-h5000m-bbr` writes `/etc/sysctl.d/10-bbr.conf`). It is software TCP congestion control, useful for variable-latency 5G links and the proxy's outer TCP socket; it is not hardware encryption/offload.
-- **OpenClash/Mihomo TUN proxy traffic is not HNAT-accelerated end-to-end**: packets pass through userspace proxy processing and encryption. HNAT can accelerate eligible direct/forwarded flows, including supported QMI/USB WAN flows, but cannot skip Mihomo's userspace work. `kmod-cryptodev` and `kmod-tls` are retained as kernel interfaces for compatible applications; Mihomo does not automatically consume them, so they are not claimed as proxy acceleration.
+- **OpenClash/Mihomo TUN proxy traffic is not HNAT-accelerated end-to-end**: packets pass through userspace proxy processing and encryption. HNAT may accelerate eligible direct Ethernet flows after successful runtime initialization; this repository does not claim USB/QMI/QMAP or proxy hardware offload. `kmod-cryptodev` and `kmod-tls` are retained as kernel interfaces for compatible applications; Mihomo does not automatically consume them, so they are not claimed as proxy acceleration.
 - **SQM** (`luci-app-sqm`, cake) — keeps latency stable when the 5G uplink jitters. Installed but not enabled; set per-link speeds in LuCI after flashing.
 - **irqbalance** — selected to distribute hardware interrupts across CPU cores; verify its service state after first boot.
 
