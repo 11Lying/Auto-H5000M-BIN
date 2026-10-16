@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Hiveton H5000M x ImmortalWrt 25.12-based HNAT build
+# Hiveton H5000M x ImmortalWrt 25.12-based integrated PPE build
 #
 # The whole build, in order:
 #
 #   1. clone the pinned chasey-dev ImmortalWrt 25.12-based MTK tree
 #   2. install the pinned ImmortalWrt feeds plus the pinned QModem feed
 #   3. stage the vendored upstream mt76 package and H5000M fan controller
-#   4. select the HNAT kernel package, enable IPv6 and apply reviewed DTS patches
+#   4. select the integrated PPE/nft-offload path, enable IPv6 and apply reviewed DTS patches
 #   5. copy config/h5000m.config -> .config, run `make defconfig`
 #   6. run the static verification suite (scripts/verify-config.sh)
 #   7. make
@@ -23,8 +23,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 REPO_URL="${REPO_URL:-https://github.com/chasey-dev/immortalwrt-mt798x-rebase}"
 REPO_REF="${REPO_REF:-25.12}"
-# Pinned commit on the 25.12 branch (2026-10-13). Has HNAT driver on 6.12
-# but H5000M defaults to open mt76 (no MT7992 in closed SDK).
+# Pinned commit on the 25.12 branch (2026-10-13). Has MTK PPE/flow-offload
+# integration on 6.12; the independent mtkhnat module is intentionally not used.
 REPO_COMMIT="${REPO_COMMIT:-468e251661cb46face4ca0c961238282a6eaaa0a}"
 
 SOURCE_DIR="${SOURCE_DIR:-immortalwrt}"
@@ -260,22 +260,20 @@ apply_patches() {
 	stage_file_safely "$ROOT_DIR/patches/970-pwm-fan-boot-duty.patch" \
 		"$dir/970-pwm-fan-boot-duty.patch"
 	log "staged target/linux/mediatek/patches-6.12/970-pwm-fan-boot-duty.patch"
-	# HNAT is selected as CONFIG_PACKAGE_kmod-mediatek_hnat in the seed.
-	# This is essential: adding CONFIG_NET_MEDIATEK_HNAT to the kernel fragment
-	# can compile mtkhnat.ko as M while omitting the package from the image.
-	# Keep IPv6 explicit in the kernel fragment for the driver's IPv6 path.
+	# Keep IPv6 explicit in the kernel fragment for the integrated PPE
+	# IPv6 flow-offload path.
 	local kernel_config="$SOURCE_DIR/target/linux/mediatek/filogic/config-6.12"
 	if ! grep -qx 'CONFIG_IPV6=y' "$kernel_config"; then
 		{
 			echo ""
-			echo "# H5000M: enable IPv6 for MediaTek HNAT IPv6 flow acceleration"
+			echo "# H5000M: enable IPv6 for integrated MediaTek PPE flow offload"
 			echo "CONFIG_IPV6=y"
 		} >> "$kernel_config"
 		log "enabled IPv6 in filogic kernel config"
 	else
 		log "IPv6 already enabled in filogic kernel config"
 	fi
-	log "HNAT selected as packaged module via CONFIG_PACKAGE_kmod-mediatek_hnat"
+	log "integrated MTK PPE selected through mtk_eth_soc + nft flow offload"
 	# Include the maintained userspace controller and read-only audit utility.
 	# An existing destination must be byte-for-byte the same staged package;
 	# never rm -rf a directory that the caller may have supplied.
@@ -294,14 +292,13 @@ apply_patches() {
 	log "staged vendored official mt76 package (MT7992 Wi-Fi)"
 
 	# 970 (kernel driver) + 971 (early autoload) + 972 (board DTS overlay)
-	# + 973 (Ethernet PDMA IRQs and HNAT phandle) + 974 (HNAT safe probe
-	# cleanup) + 976 (HNAT module autoload).
+	# + 973 (four PDMA + four FE IRQ resources required by the pinned 6.12
+	# RSS driver). The independent mtkhnat route is retained under
+	# patches/optional-independent-hnat but is deliberately not applied.
 	for p in \
 		971-hwmon-pwmfan-boot-autoload.patch \
 		972-h5000m-fan-boot-duty.patch \
-		973-h5000m-hnat-node.patch \
-		974-mtk-hnat-safe-probe-cleanup.patch \
-		976-mtkhnat-autoload.patch; do
+		973-h5000m-ethernet-rss-irqs.patch; do
 		[ -f "$ROOT_DIR/patches/$p" ] || die "missing patch $p"
 		if patch -d "$SOURCE_DIR" -p1 --dry-run --forward --silent < "$ROOT_DIR/patches/$p" >/dev/null 2>&1; then
 			patch -d "$SOURCE_DIR" -p1 --forward --silent < "$ROOT_DIR/patches/$p" \
@@ -446,18 +443,21 @@ collect() {
 
 	# fully expanded config + package manifest + build identity
 	cp -f "$SOURCE_DIR/.config" "$ARTIFACTS_DIR/build.config"
-	grep -q '^CONFIG_PACKAGE_kmod-mediatek_hnat=y$' "$ARTIFACTS_DIR/build.config" \
-		|| die "expanded config did not select kmod-mediatek_hnat"
+	grep -q '^CONFIG_PACKAGE_kmod-nft-offload=y$' "$ARTIFACTS_DIR/build.config" \
+		|| die "expanded config did not select kmod-nft-offload"
 	local manifest="$tgt/immortalwrt-mediatek-filogic-hiveton_h5000m.manifest"
 	[ -s "$manifest" ] || die "missing H5000M image manifest"
-	# Gate the published image, not just source config. In particular, this
-	# catches a compiled-but-unpackaged HNAT .ko before firmware is uploaded.
-	for pkg in kmod-mediatek_hnat kmod-nf-conntrack kmod-nf-nat kmod-nf-flow \
-		   kmod-nft-fullcone kmod-tcp-bbr kmod-usb3 kmod-qmi_wwan_q kmod-mt7996e hnat-detect; do
+	# Gate the published image, not only source config. The active route is
+	# integrated mtk_eth_soc/mtk_ppe; USB/QMI is intentionally not counted as
+	# proven PPE hardware offload here.
+	for pkg in kmod-nf-conntrack kmod-nf-nat kmod-nf-flow kmod-nft-offload \
+		   kmod-nft-fullcone kmod-tcp-bbr kmod-usb3 kmod-qmi_wwan_q kmod-mt7996e; do
 		grep -q "^${pkg} - " "$manifest" || die "required acceleration/data-path package absent from image manifest: $pkg"
 	done
-	find "$SOURCE_DIR/bin" -type f -name 'kmod-mediatek_hnat-*.apk' -print -quit | grep -q . \
-		|| die "HNAT kernel module APK was not built"
+	if grep -q '^kmod-mediatek_hnat - ' "$manifest" || \
+	   grep -q '^hnat-detect - ' "$manifest"; then
+		die "independent mtkhnat packages unexpectedly entered the integrated-PPE image"
+	fi
 	cp -f "$manifest" "$ARTIFACTS_DIR/openwrt-image.manifest"
 	[ -f "$tgt/profiles.json" ] && cp -f "$tgt/profiles.json" "$ARTIFACTS_DIR/" || true
 
@@ -471,8 +471,8 @@ collect() {
 		echo "target=mediatek/filogic"
 		echo "kernel=$(sed -n 's/^LINUX_VERSION-6\.12 = //p' "$SOURCE_DIR/target/linux/generic/kernel-6.12")"
 		echo "wifi_stack=official mt76 (kmod-mt7996e + kmod-mt7992-23-firmware)"
-		echo "fan_patches=970+971+972+973+974+976 applied; upstream thermal trips retained"
-		echo "acceleration=HNAT module packaged; nft flow HW+SW; IPv6; USB-QMI; BBR; MT76/WED3.1"
+		echo "fan_patches=970+971+972+973 applied; integrated PPE/nft-offload; upstream thermal trips retained"
+		echo "acceleration=integrated mtk_eth_soc/mtk_ppe + nft-offload; USB-QMI PPE offload unclaimed; IPv6; BBR; MT76/WED3.1"
 		echo "--- feeds ---"
 		grep '^src-git' "$SOURCE_DIR/feeds.conf.default"
 		echo "--- openclash ---"

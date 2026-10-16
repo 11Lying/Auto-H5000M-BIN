@@ -5,9 +5,7 @@ run() { command -v "$1" >/dev/null 2>&1 && "$@" 2>&1 || echo "(unavailable: $1)"
 section BOARD; cat /tmp/sysinfo/board_name /tmp/sysinfo/model 2>/dev/null
 section KERNEL; uname -a
 section WIFI_MT7992; run iw phy; run iw dev; dmesg | grep -iE 'mt7992|mtk.*wifi|firmware.*(mt799|mediatek)' | tail -80
-section HNAT; apk info -e kmod-mediatek_hnat 2>&1 || true; lsmod | grep -iE 'mtkhnat|hnat' || true; for d in /sys/bus/platform/devices/*hnat*; do [ -e "$d" ] && { echo "$d"; readlink "$d/driver" 2>/dev/null || echo 'no platform driver symlink'; }; done; dmesg | grep -iE 'hnat|PPE' | tail -80
-section WED_PPE; # WED is integrated in the built-in mtk_eth driver on this MT76 build; no standalone WED module is expected.
-find /sys/kernel/debug -maxdepth 4 -iname '*wed*' -o -iname '*ppe*' -o -iname '*hnat*' 2>/dev/null | head -80; dmesg | grep -iE 'mtk_eth|mtk.*wed|ppe|mtkhnat|hnat' | tail -120
+section PPE; apk info -e kmod-nft-offload 2>&1 || true; find /sys/kernel/debug -maxdepth 4 -iname '*wed*' -o -iname '*ppe*' 2>/dev/null | head -80; dmesg | grep -iE 'mtk_eth|mtk.*wed|ppe' | tail -120
 section FLOW_OFFLOAD; uci -q show firewall | grep -E 'flow_offloading' || true; nft list ruleset 2>/dev/null | grep -i -A8 -B2 flowtable || true; cat /proc/net/nf_flowtable 2>/dev/null || true
 section BBR; sysctl net.ipv4.tcp_congestion_control 2>&1; lsmod | grep -E 'tcp_bbr' || true; grep -E '^net.ipv4.tcp_congestion_control=' /etc/sysctl.d/*.conf 2>/dev/null || true
 section QMI; lsusb 2>/dev/null; ip -d link; ls -l /dev/cdc-wdm* /dev/ttyUSB* 2>/dev/null
