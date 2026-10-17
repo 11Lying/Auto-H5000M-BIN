@@ -1,0 +1,19 @@
+From: Tao Gong <gongtao0607@gmail.com>
+Subject: [PATCH] wifi: mt76: mt7996: fix WED RRO BA delete event layout
+
+Backport upstream mt76 commit bd49f06353d7e8cdfa1458912ba9a866870cb795.
+The firmware sends 12-byte BA-delete event records, but this pinned mt76
+source described only 8 bytes. The shorter struct misaligns batched event
+parsing and can leave stale HW-RRO sessions after reassociation.
+
+--- a/mt7996/mcu.h
++++ b/mt7996/mcu.h
+@@ -284,6 +284,9 @@ struct mt7996_mcu_wed_rro_ba_delete_event {
+ 	__le16 len;
+ 
+ 	__le16 session_id;
++	__le16 wlan_id;
++	u8 tid;
++	u8 __rsv1;
+ 	u8 __rsv2[2];
+ } __packed;

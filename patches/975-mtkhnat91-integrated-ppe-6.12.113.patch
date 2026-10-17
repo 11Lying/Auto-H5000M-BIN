@@ -1,0 +1,26 @@
+From: H5000M build audit
+Subject: [PATCH] build: adapt vendor HNAT patch queue to integrated PPE 6.12.113
+
+The HNAT driver is not selected in this build. Kernel 6.12.113 changed the
+mtk_eth_soc probe unwind around the dummy netdevice/NAPI registration, so the
+vendor patch's HNAT-only error-path guard no longer applies. Preserve the
+original 999-eth-91 patch separately and omit only that HNAT-specific unwind
+hunk; the kernel PPE path remains enabled and the HNAT module stays disabled.
+
+--- a/target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch
++++ b/target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch
+@@ -162,14 +162,4 @@
+ +#endif
+  
+  	mtk_eth_debugfs_init(eth);
+  
+-@@ -7671,7 +7730,9 @@ err_unreg_netdev:
+- 	free_netdev(eth->dummy_dev);
+- err_deinit_ppe:
+- 	mtk_napi_del(eth);
+-+#if !defined(CONFIG_NET_MEDIATEK_HNAT) && !defined(CONFIG_NET_MEDIATEK_HNAT_MODULE)
+- 	mtk_ppe_deinit(eth);
+-+#endif
+- 	mtk_release_all_muxes(eth);
+- 	mtk_mdio_cleanup(eth);
+- err_free_dev:

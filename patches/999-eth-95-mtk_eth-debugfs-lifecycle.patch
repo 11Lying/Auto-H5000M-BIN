@@ -1,0 +1,65 @@
+From: H5000M build audit
+Subject: [PATCH] net: ethernet: mediatek: initialize diagnostics before netdev exposure
+
+Keep the debugfs-owned runtime statistics storage alive before netdevices can
+receive traffic.  The vendor debugfs initializer allocates the object also
+used by the HW-LRO RX path; a failed allocation must fail probe rather than
+leave a NULL pointer reachable from NAPI.  A missing debugfs/procfs mount is
+non-fatal once the storage object exists.  Drain callbacks on registration
+failure and driver removal before the backing device state is released.
+
+--- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
++++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+@@ -7695,8 +7695,6 @@
+ 	}
+ #endif
+ 
+-	mtk_eth_debugfs_init(eth);
+-
+ 	/* we run 2 devices on the same DMA ring so we need a dummy device
+ 	 * for NAPI to work
+ 	 */
+@@ -7678,14 +7678,24 @@
+ 	if (eth->hwlro) {
+ 		for (i = 0; i < MTK_HW_LRO_RING_NUM; i++) {
+ 			netif_napi_add_weight(eth->dummy_dev, &eth->rx_napi[MTK_HW_LRO_RING(i)].napi,
+ 					      mtk_napi_rx, MTK_NAPI_WEIGHT);
+ 		}
+ 	}
+ 
++	/* Initialize the backing storage before register_netdev() exposes any
++	 * interface to userspace. The debugfs/procfs nodes are optional, but
++	 * the driver also uses this object for HW-LRO counters.
++	 */
++	err = mtk_eth_debugfs_init(eth);
++	if (err && !eth->debugfs)
++		goto err_unreg_netdev;
++	if (err)
++		dev_warn(eth->dev, "debugfs/proc statistics unavailable (%d)\n", err);
++
+ 	for (i = 0; i < MTK_MAX_DEVS; i++) {
+ 		if (!eth->netdev[i])
+ 			continue;
+ 
+ 		err = register_netdev(eth->netdev[i]);
+ 		if (err) {
+ 			dev_err(eth->dev, "error bringing up device\n");
+@@ -7738,6 +7747,7 @@
+ 	return 0;
+ 
+ err_unreg_netdev:
++	mtk_eth_debugfs_exit(eth);
+ 	mtk_unreg_dev(eth);
+ err_deinit_ppe:
+ 	mtk_napi_del(eth);
+@@ -7780,6 +7790,10 @@
+ 	struct mtk_mac *mac;
+ 	int i;
+ 
++	/* Stop new debugfs/proc reads and drain active callbacks before MMIO or
++	 * devm-backed Ethernet state is torn down.
++	 */
++	mtk_eth_debugfs_exit(eth);
+ 	mtk_gso_skb_copy_head = NULL;
+ 	mtk_ip_frag_skb_copy_head = NULL;
+ 

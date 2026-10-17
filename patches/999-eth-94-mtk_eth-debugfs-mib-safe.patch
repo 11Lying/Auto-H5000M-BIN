@@ -1,0 +1,407 @@
+From: H5000M build audit
+Subject: [PATCH] net: ethernet: mediatek: guard MAC statistics
+
+--- a/drivers/net/ethernet/mediatek/mtk_eth_dbg.c
++++ b/drivers/net/ethernet/mediatek/mtk_eth_dbg.c
+@@ -1053,10 +1053,14 @@
+ 
+ static void mtk_gdm_cnt_read(struct mtk_eth *eth)
+ {
+-	const struct mtk_reg_map *reg_map = eth->soc->reg_map;
++	const struct mtk_reg_map *reg_map;
+ 	struct mtk_hw_stats *hw_stats;
+ 	u32 i, mib_base;
+ 
++	if (!eth || !eth->soc || !eth->soc->reg_map)
++		return;
++
++	reg_map = eth->soc->reg_map;
+ 	for (i = 0; i < MTK_MAX_DEVS; i++) {
+ 		if (!eth->mac[i] || !eth->mac[i]->hw_stats)
+ 			continue;
+@@ -1105,29 +1109,36 @@
+ 	.release = mtk_esw_cnt_release
+ };
+ 
+-static void mtk_mac_mib_dump(struct seq_file *m, u32 gdm_id)
++static void mtk_mac_mib_dump(struct seq_file *m, u32 gdm_id,
++			     const struct mtk_gmac_hw_stats *stats)
+ {
+-	PRINT_FORMATTED_MAC_MIB(m, TX_UC_BYTE_CNT, tx_uc_bytes);
+-	PRINT_FORMATTED_MAC_MIB(m, TX_UC_PKT_CNT, tx_uc_packets);
+-	PRINT_FORMATTED_MAC_MIB(m, TX_MC_BYTE_CNT, tx_mc_bytes);
+-	PRINT_FORMATTED_MAC_MIB(m, TX_MC_PKT_CNT, tx_mc_packets);
+-	PRINT_FORMATTED_MAC_MIB(m, TX_BC_BYTE_CNT, tx_bc_bytes);
+-	PRINT_FORMATTED_MAC_MIB(m, TX_BC_PKT_CNT, tx_bc_packets);
+-
+-	PRINT_FORMATTED_MAC_MIB(m, RX_UC_BYTE_CNT, rx_uc_bytes);
+-	PRINT_FORMATTED_MAC_MIB(m, RX_UC_PKT_CNT, rx_uc_packets);
+-	PRINT_FORMATTED_MAC_MIB(m, RX_MC_BYTE_CNT, rx_mc_bytes);
+-	PRINT_FORMATTED_MAC_MIB(m, RX_MC_PKT_CNT, rx_mc_packets);
+-	PRINT_FORMATTED_MAC_MIB(m, RX_BC_BYTE_CNT, rx_bc_bytes);
+-	PRINT_FORMATTED_MAC_MIB(m, RX_BC_PKT_CNT, rx_bc_packets);
++	PRINT_FORMATTED_MAC_MIB(m, gdm_id, stats, TX_UC_BYTE_CNT, tx_uc_bytes);
++	PRINT_FORMATTED_MAC_MIB(m, gdm_id, stats, TX_UC_PKT_CNT, tx_uc_packets);
++	PRINT_FORMATTED_MAC_MIB(m, gdm_id, stats, TX_MC_BYTE_CNT, tx_mc_bytes);
++	PRINT_FORMATTED_MAC_MIB(m, gdm_id, stats, TX_MC_PKT_CNT, tx_mc_packets);
++	PRINT_FORMATTED_MAC_MIB(m, gdm_id, stats, TX_BC_BYTE_CNT, tx_bc_bytes);
++	PRINT_FORMATTED_MAC_MIB(m, gdm_id, stats, TX_BC_PKT_CNT, tx_bc_packets);
++
++	PRINT_FORMATTED_MAC_MIB(m, gdm_id, stats, RX_UC_BYTE_CNT, rx_uc_bytes);
++	PRINT_FORMATTED_MAC_MIB(m, gdm_id, stats, RX_UC_PKT_CNT, rx_uc_packets);
++	PRINT_FORMATTED_MAC_MIB(m, gdm_id, stats, RX_MC_BYTE_CNT, rx_mc_bytes);
++	PRINT_FORMATTED_MAC_MIB(m, gdm_id, stats, RX_MC_PKT_CNT, rx_mc_packets);
++	PRINT_FORMATTED_MAC_MIB(m, gdm_id, stats, RX_BC_BYTE_CNT, rx_bc_bytes);
++	PRINT_FORMATTED_MAC_MIB(m, gdm_id, stats, RX_BC_PKT_CNT, rx_bc_packets);
+ }
+ 
+ void mtk_mac_mib_update(struct mtk_mac *mac, struct mtk_hw_stats *prev,
+ 			struct mtk_hw_stats *cur)
+ {
+-	struct mtk_eth *eth = mac->hw;
++	struct mtk_eth *eth;
+ 
+-	if (!mtk_is_netsys_v3_or_greater(eth))
++	if (!mac || !prev || !cur || !mac->hw ||
++	    mac->id < MTK_GMAC1_ID || mac->id >= MTK_GMAC_ID_MAX ||
++	    mac->id >= MTK_MAX_DEVS)
++		return;
++
++	eth = mac->hw;
++	if (!eth->soc || !mtk_is_netsys_v3_or_greater(eth))
+ 		return;
+ 
+ 	gmac_hw_stats[mac->id].tx_uc_packets +=
+@@ -1160,24 +1171,51 @@
+ static int mtk_eth_debugfs_mac_cnt_show(struct seq_file *m, void *v)
+ {
+ 	struct mtk_eth *eth = m->private;
++	struct mtk_mac *mac;
++	struct mtk_hw_stats *hw_stats;
++	struct mtk_gmac_hw_stats stats;
++	unsigned long flags;
+ 	int i;
+ 
+ 	seq_puts(m, "+------------------------------------+\n");
+ 	seq_puts(m, "|              <<GMAC>>              |\n");
+ 
+-	for (i = MTK_GMAC1_ID; i < MTK_GMAC_ID_MAX; i++) {
+-		if (mtk_interface_mode_is_xgmii(eth->mac[i]->interface))
++	if (!eth || !eth->soc) {
++		seq_puts(m, "| Ethernet device unavailable       |\n");
++		goto out;
++	}
++
++	for (i = MTK_GMAC1_ID;
++	     i < MTK_GMAC_ID_MAX && i < ARRAY_SIZE(eth->mac); i++) {
++		mac = READ_ONCE(eth->mac[i]);
++		if (!mac || mac->id != i) {
++			seq_printf(m, "| MAC%d: not present                |\n", i + 1);
++			continue;
++		}
++
++		hw_stats = READ_ONCE(mac->hw_stats);
++		if (!hw_stats) {
++			seq_printf(m, "| MAC%d: statistics unavailable    |\n", i + 1);
++			continue;
++		}
++
++		if (mtk_interface_mode_is_xgmii(mac->interface))
+ 			continue;
+ 
+-		spin_lock(&eth->mac[i]->hw_stats->stats_lock);
+-		mtk_mac_mib_dump(m, i);
+-		memset(&gmac_hw_stats[i], 0, sizeof(struct mtk_gmac_hw_stats));
+-		spin_unlock(&eth->mac[i]->hw_stats->stats_lock);
++		/* The stats lock serializes mtk_mac_mib_update(). Copy and clear
++		 * under the lock, then format outside the critical section.
++		 */
++		spin_lock_irqsave(&hw_stats->stats_lock, flags);
++		stats = gmac_hw_stats[i];
++		memset(&gmac_hw_stats[i], 0, sizeof(gmac_hw_stats[i]));
++		spin_unlock_irqrestore(&hw_stats->stats_lock, flags);
++
++		mtk_mac_mib_dump(m, i, &stats);
+ 		seq_puts(m, "|                                    |\n");
+ 	}
+ 
++out:
+ 	seq_puts(m, "+------------------------------------+\n");
+-
+ 	return 0;
+ }
+ 
+@@ -1187,46 +1225,53 @@
+ }
+ DEFINE_SHOW_ATTRIBUTE(mtk_eth_debugfs_mac_cnt);
+ 
+-static void mtk_xfi_mib_dump(struct seq_file *m, u32 gdm_id)
++static void mtk_xfi_mib_dump(struct seq_file *m, u32 gdm_id,
++			     const struct mtk_xmac_hw_stats *stats)
+ {
+ 	struct mtk_eth *eth = m->private;
+ 
+-	PRINT_FORMATTED_XFI_MIB(m, TX_BYTE_CNT, tx_bytes);
+-	PRINT_FORMATTED_XFI_MIB(m, TX_PKT_CNT, tx_packets);
+-	PRINT_FORMATTED_XFI_MIB(m, TX_ETH_CNT, tx_eth_packets);
+-	PRINT_FORMATTED_XFI_MIB(m, TX_PAUSE_CNT, tx_pause_packets);
+-	PRINT_FORMATTED_XFI_MIB(m, TX_UC_BYTE_CNT, tx_uc_bytes);
+-	PRINT_FORMATTED_XFI_MIB(m, TX_UC_PKT_CNT, tx_uc_packets);
+-	PRINT_FORMATTED_XFI_MIB(m, TX_MC_BYTE_CNT, tx_mc_bytes);
+-	PRINT_FORMATTED_XFI_MIB(m, TX_MC_PKT_CNT, tx_mc_packets);
+-	PRINT_FORMATTED_XFI_MIB(m, TX_BC_BYTE_CNT, tx_bc_bytes);
+-	PRINT_FORMATTED_XFI_MIB(m, TX_BC_PKT_CNT, tx_bc_packets);
+-
+-	PRINT_FORMATTED_XFI_MIB(m, RX_BYTE_CNT, rx_bytes);
+-	PRINT_FORMATTED_XFI_MIB(m, RX_PKT_CNT, rx_packets);
+-	PRINT_FORMATTED_XFI_MIB(m, RX_ETH_CNT, rx_eth_packets);
+-	PRINT_FORMATTED_XFI_MIB(m, RX_PAUSE_CNT, rx_pause_packets);
+-	PRINT_FORMATTED_XFI_MIB(m, RX_LEN_ERR_CNT, rx_lenerr_packets);
+-	PRINT_FORMATTED_XFI_MIB(m, RX_CRC_ERR_CNT, rx_crcerr_packets);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, TX_BYTE_CNT, tx_bytes);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, TX_PKT_CNT, tx_packets);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, TX_ETH_CNT, tx_eth_packets);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, TX_PAUSE_CNT, tx_pause_packets);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, TX_UC_BYTE_CNT, tx_uc_bytes);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, TX_UC_PKT_CNT, tx_uc_packets);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, TX_MC_BYTE_CNT, tx_mc_bytes);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, TX_MC_PKT_CNT, tx_mc_packets);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, TX_BC_BYTE_CNT, tx_bc_bytes);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, TX_BC_PKT_CNT, tx_bc_packets);
++
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_BYTE_CNT, rx_bytes);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_PKT_CNT, rx_packets);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_ETH_CNT, rx_eth_packets);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_PAUSE_CNT, rx_pause_packets);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_LEN_ERR_CNT, rx_lenerr_packets);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_CRC_ERR_CNT, rx_crcerr_packets);
+ 	if (eth->soc->caps != MT7988_CAPS)
+-		PRINT_FORMATTED_XFI_MIB(m, RX_RUNT_PKT_CNT, rx_runt_packets);
+-	PRINT_FORMATTED_XFI_MIB(m, RX_UC_BYTE_CNT, rx_uc_bytes);
+-	PRINT_FORMATTED_XFI_MIB(m, RX_UC_PKT_CNT, rx_uc_packets);
+-	PRINT_FORMATTED_XFI_MIB(m, RX_MC_BYTE_CNT, rx_mc_bytes);
+-	PRINT_FORMATTED_XFI_MIB(m, RX_MC_PKT_CNT, rx_mc_packets);
+-	PRINT_FORMATTED_XFI_MIB(m, RX_BC_BYTE_CNT, rx_bc_bytes);
+-	PRINT_FORMATTED_XFI_MIB(m, RX_BC_PKT_CNT, rx_bc_packets);
+-	PRINT_FORMATTED_XFI_MIB(m, RX_UC_DROP_CNT, rx_uc_drop);
+-	PRINT_FORMATTED_XFI_MIB(m, RX_BC_DROP_CNT, rx_mc_drop);
+-	PRINT_FORMATTED_XFI_MIB(m, RX_MC_DROP_CNT, rx_bc_drop);
+-	PRINT_FORMATTED_XFI_MIB(m, RX_ALL_DROP_CNT, rx_all_drop);
++		PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_RUNT_PKT_CNT, rx_runt_packets);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_UC_BYTE_CNT, rx_uc_bytes);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_UC_PKT_CNT, rx_uc_packets);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_MC_BYTE_CNT, rx_mc_bytes);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_MC_PKT_CNT, rx_mc_packets);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_BC_BYTE_CNT, rx_bc_bytes);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_BC_PKT_CNT, rx_bc_packets);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_UC_DROP_CNT, rx_uc_drop);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_BC_DROP_CNT, rx_bc_drop);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_MC_DROP_CNT, rx_mc_drop);
++	PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, RX_ALL_DROP_CNT, rx_all_drop);
+ }
+ 
+ void mtk_xfi_mib_update(struct mtk_mac *mac)
+ {
+-	struct mtk_eth *eth = mac->hw;
++	struct mtk_eth *eth;
+ 
+-	if (!mtk_is_netsys_v3_or_greater(eth))
++	if (!mac || !mac->hw || !mac->hw_stats ||
++	    mac->id < MTK_GMAC1_ID || mac->id >= MTK_GMAC_ID_MAX ||
++	    mac->id >= MTK_MAX_DEVS)
++		return;
++
++	eth = mac->hw;
++	if (!eth->soc || !mtk_is_netsys_v3_or_greater(eth))
+ 		return;
+ 
+ 	xmac_hw_stats[mac->id].tx_packets +=
+@@ -1278,24 +1323,41 @@
+ static int mtk_eth_debugfs_xfi_cnt_show(struct seq_file *m, void *v)
+ {
+ 	struct mtk_eth *eth = m->private;
++	struct mtk_mac *mac;
++	struct mtk_hw_stats *hw_stats;
++	struct mtk_xmac_hw_stats stats;
++	unsigned long flags;
+ 	int i;
+ 
+ 	seq_puts(m, "+------------------------------------+\n");
+ 	seq_puts(m, "|             <<XFI MAC>>            |\n");
+ 
+-	for (i = MTK_GMAC2_ID; i < MTK_GMAC_ID_MAX; i++) {
+-		if (!eth->mac[i] || !mtk_interface_mode_is_xgmii(eth->mac[i]->interface))
++	if (!eth || !eth->soc) {
++		seq_puts(m, "| Ethernet device unavailable       |\n");
++		goto out;
++	}
++
++	for (i = MTK_GMAC2_ID;
++	     i < MTK_GMAC_ID_MAX && i < ARRAY_SIZE(eth->mac); i++) {
++		mac = READ_ONCE(eth->mac[i]);
++		if (!mac || mac->id != i)
++			continue;
++
++		hw_stats = READ_ONCE(mac->hw_stats);
++		if (!hw_stats || !mtk_interface_mode_is_xgmii(mac->interface))
+ 			continue;
+ 
+-		spin_lock(&eth->mac[i]->hw_stats->stats_lock);
+-		mtk_xfi_mib_dump(m, i);
+-		memset(&xmac_hw_stats[i], 0, sizeof(struct mtk_xmac_hw_stats));
+-		spin_unlock(&eth->mac[i]->hw_stats->stats_lock);
++		spin_lock_irqsave(&hw_stats->stats_lock, flags);
++		stats = xmac_hw_stats[i];
++		memset(&xmac_hw_stats[i], 0, sizeof(xmac_hw_stats[i]));
++		spin_unlock_irqrestore(&hw_stats->stats_lock, flags);
++
++		mtk_xfi_mib_dump(m, i, &stats);
+ 		seq_puts(m, "|                                    |\n");
+ 	}
+ 
++out:
+ 	seq_puts(m, "+------------------------------------+\n");
+-
+ 	return 0;
+ }
+ 
+@@ -2470,8 +2532,12 @@
+ static struct mtk_pcs_lynxi *id_to_mtk_sgmii_pcs(struct mtk_eth *eth, unsigned int id)
+ {
+ 	unsigned int sgmii_to_mac[2] = {0, 1};
++	struct mtk_mac *mac;
+ 	struct phylink_pcs *pcs;
+ 
++	if (!eth || !eth->soc)
++		return NULL;
++
+ 	if (eth->soc->caps == MT7988_CAPS) {
+ 		sgmii_to_mac[0] = 2;
+ 		sgmii_to_mac[1] = 1;
+@@ -2480,10 +2546,15 @@
+ 		sgmii_to_mac[1] = 2;
+ 	}
+ 
+-	if (id >= ARRAY_SIZE(sgmii_to_mac))
++	if (id >= ARRAY_SIZE(sgmii_to_mac) ||
++	    sgmii_to_mac[id] >= ARRAY_SIZE(eth->mac))
+ 		return NULL;
+ 
+-	pcs = eth->mac[sgmii_to_mac[id]]->sgmii_pcs;
++	mac = READ_ONCE(eth->mac[sgmii_to_mac[id]]);
++	if (!mac)
++		return NULL;
++
++	pcs = READ_ONCE(mac->sgmii_pcs);
+ 	if (!pcs)
+ 		return NULL;
+ 
+@@ -2582,12 +2653,18 @@
+ static struct mtk_usxgmii_pcs *id_to_mtk_usxgmii_pcs(struct mtk_eth *eth, unsigned int id)
+ {
+ 	unsigned int usxgmii_to_mac[2] = {2, 1};
++	struct mtk_mac *mac;
+ 	struct phylink_pcs *pcs;
+ 
+-	if (id >= ARRAY_SIZE(usxgmii_to_mac))
++	if (!eth || id >= ARRAY_SIZE(usxgmii_to_mac) ||
++	    usxgmii_to_mac[id] >= ARRAY_SIZE(eth->mac))
+ 		return NULL;
+ 
+-	pcs = eth->mac[usxgmii_to_mac[id]]->usxgmii_pcs;
++	mac = READ_ONCE(eth->mac[usxgmii_to_mac[id]]);
++	if (!mac)
++		return NULL;
++
++	pcs = READ_ONCE(mac->usxgmii_pcs);
+ 	if (!pcs)
+ 		return NULL;
+ 
+@@ -2885,6 +2962,9 @@
+ 	char name[16];
+ 	int i, ret = 0;
+ 
++	if (!eth || !eth->dev)
++		return -EINVAL;
++
+ 	eth->debugfs = devm_kzalloc(eth->dev, sizeof(*eth->debugfs), GFP_KERNEL);
+ 	if (!eth->debugfs) {
+ 		dev_err(eth->dev, "%s: failed to alloc debugfs structure\n", __func__);
+@@ -2892,9 +2972,12 @@
+ 	}
+ 
+ 	eth->debugfs->root = debugfs_create_dir("mtketh", NULL);
+-	if (!eth->debugfs->root) {
+-		dev_err(eth->dev, "%s: failed to create debugfs directory\n", __func__);
+-		return -ENOMEM;
++	if (IS_ERR_OR_NULL(eth->debugfs->root)) {
++		ret = eth->debugfs->root ? PTR_ERR(eth->debugfs->root) : -ENOMEM;
++		eth->debugfs->root = NULL;
++		dev_warn(eth->dev, "%s: failed to create debugfs directory (%d)\n",
++			 __func__, ret);
++		return ret;
+ 	}
+ 
+ 	eth->debugfs->mt7530.mmio_base = eth->esw_base;
+@@ -2985,11 +3068,26 @@
+ 
+ err:
+ 	debugfs_remove_recursive(eth->debugfs->root);
++	eth->debugfs->root = NULL;
++	if (eth->debugfs->procfs_root) {
++		proc_remove(eth->debugfs->procfs_root);
++		eth->debugfs->procfs_root = NULL;
++	}
+ 	return ret;
+ }
+ 
+ void mtk_eth_debugfs_exit(struct mtk_eth *eth)
+ {
++	if (!eth || !eth->debugfs)
++		return;
++
++	/* debugfs_remove/proc_remove drain active callbacks before the parent
++	 * driver's devm-owned Ethernet state and MMIO mappings are released.
++	 */
+ 	debugfs_remove_recursive(eth->debugfs->root);
+-	remove_proc_subtree(PROCREG_DIR, eth->debugfs->procfs_root);
++	eth->debugfs->root = NULL;
++	if (eth->debugfs->procfs_root) {
++		proc_remove(eth->debugfs->procfs_root);
++		eth->debugfs->procfs_root = NULL;
++	}
+ }
+--- a/drivers/net/ethernet/mediatek/mtk_eth_dbg.h
++++ b/drivers/net/ethernet/mediatek/mtk_eth_dbg.h
+@@ -116,11 +116,11 @@
+ 		      MTK_MAC_##reg##_H) << 32);		\
+ })
+ 
+-#define PRINT_FORMATTED_MAC_MIB(m, reg, field)			\
++#define PRINT_FORMATTED_MAC_MIB(m, gdm_id, stats, reg, field)\
+ ({								\
+-	seq_printf(m, "| MAC%d_%s	: %010llu |\n",		\
+-		   gdm_id + 1, #reg,				\
+-		   gmac_hw_stats[gdm_id].field);		\
++	seq_printf(m, "| MAC%d_%s\t: %010llu |\n",		\
++		   (gdm_id) + 1, #reg,				\
++		   (stats)->field);				\
+ })
+ 
+ #define XFI_MIB_READ32(id, reg, mask)				\
+@@ -137,11 +137,11 @@
+ 		      MTK_XFI_##reg##_H) << 32);		\
+ })
+ 
+-#define PRINT_FORMATTED_XFI_MIB(m, reg, field)			\
++#define PRINT_FORMATTED_XFI_MIB(m, gdm_id, stats, reg, field)\
+ ({								\
+-	seq_printf(m, "| XFI%d_%s	: %010llu |\n",		\
+-		   gdm_id, #reg,				\
+-		   xmac_hw_stats[gdm_id].field);		\
++	seq_printf(m, "| XFI%d_%s\t: %010llu |\n",		\
++		   (gdm_id), #reg,				\
++		   (stats)->field);				\
+ })
+ 
+ /* HW LRO flush reason */

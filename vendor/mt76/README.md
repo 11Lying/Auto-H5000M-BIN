@@ -7,6 +7,11 @@ This directory is the official `package/kernel/mt76` package from
 - mt76 source commit: `39c960c3ada558b4c2e7915772483d3731573d09`
 - mt76 source date: `2026-03-19`
 
+The recipe commit includes ImmortalWrt's selected 6.18.55 backports, but its
+raw mt76 source is still the March snapshot. Audit found the upstream
+`mt7996_mcu_wed_rro_ba_delete_event` layout fix is absent from that snapshot.
+Patch `0118` backports the exact upstream change (`bd49f06353d7e8cdfa1458912ba9a866870cb795`): the firmware record is 12 bytes and the previous 8-byte struct misparsed batched RRO BA-delete events. This targeted patch is kept separate from a broad mt76 source bump.
+
 The chasey-dev 25.12 base used by this branch does not contain
 `package/kernel/mt76`, although the H5000M device profile selects the official
 MT7992 stack (`kmod-mt7996e` and `kmod-mt7992-23-firmware`). Without this
