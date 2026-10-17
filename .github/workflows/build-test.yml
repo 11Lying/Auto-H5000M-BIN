@@ -2,7 +2,7 @@ name: H5000M ImmortalWrt 25.12 integrated PPE build
 
 on:
   push:
-    branches: [main, audit-upgrade-2026-10]
+    branches: [main, hnat-6.12, audit-upgrade-2026-10]
   workflow_dispatch:
     inputs:
       confirm_firmware_build:
@@ -251,23 +251,23 @@ jobs:
           eth_src=$(find immortalwrt/build_dir -type f -path '*/drivers/net/ethernet/mediatek/mtk_eth_soc.c' -print -quit)
           test -n "$eth_src"
           python3 - "$eth_src" <<'PY'
-import pathlib, sys
-s=pathlib.Path(sys.argv[1]).read_text()
-probe=s[s.find('static int mtk_probe('):]
-assert probe.find('alloc_netdev_dummy(0)') < probe.find('register_netdev(eth->netdev[i])')
-assert probe.find('netif_napi_add(eth->dummy_dev') < probe.find('register_netdev(eth->netdev[i])')
-print('MTK dummy netdev/NAPI setup precedes netdev registration')
-PY
+          import pathlib, sys
+          s=pathlib.Path(sys.argv[1]).read_text()
+          probe=s[s.find('static int mtk_probe('):]
+          assert probe.find('alloc_netdev_dummy(0)') < probe.find('register_netdev(eth->netdev[i])')
+          assert probe.find('netif_napi_add(eth->dummy_dev') < probe.find('register_netdev(eth->netdev[i])')
+          print('MTK dummy netdev/NAPI setup precedes netdev registration')
+          PY
           eth_src=$(find immortalwrt/build_dir -type f -path '*/drivers/net/ethernet/mediatek/mtk_eth_soc.c' -print -quit)
           test -n "$eth_src"
           python3 - "$eth_src" <<'PY'
-import pathlib, sys
-s=pathlib.Path(sys.argv[1]).read_text()
-probe=s[s.find('static int mtk_probe('):]
-assert probe.find('alloc_netdev_dummy(0)') < probe.find('register_netdev(eth->netdev[i])')
-assert probe.find('netif_napi_add(eth->dummy_dev') < probe.find('register_netdev(eth->netdev[i])')
-print('MTK dummy netdev/NAPI setup precedes netdev registration')
-PY
+          import pathlib, sys
+          s=pathlib.Path(sys.argv[1]).read_text()
+          probe=s[s.find('static int mtk_probe('):]
+          assert probe.find('alloc_netdev_dummy(0)') < probe.find('register_netdev(eth->netdev[i])')
+          assert probe.find('netif_napi_add(eth->dummy_dev') < probe.find('register_netdev(eth->netdev[i])')
+          print('MTK dummy netdev/NAPI setup precedes netdev registration')
+          PY
           grep -q 'GIC_SPI 189 IRQ_TYPE_LEVEL_HIGH' immortalwrt/target/linux/mediatek/dts/mt7987.dtsi
           grep -q 'GIC_SPI 192 IRQ_TYPE_LEVEL_HIGH' immortalwrt/target/linux/mediatek/dts/mt7987.dtsi
           ! grep -q 'mtketh-soc = <&eth>;' immortalwrt/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
