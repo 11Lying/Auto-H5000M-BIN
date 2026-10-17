@@ -1,0 +1,36 @@
+#!/bin/sh
+# Enable the H5000M modem helpers without rewriting WAN, DNS, Wi-Fi, firewall,
+# OpenClash policy, or user SMS credentials. AT roles are mapped dynamically
+# by rm502q-at-init/hotplug when QModem's modem-device section is available.
+set -u
+
+for service in rm502q-at-init modemwebui qmi-recovery; do
+	[ -x "/etc/init.d/$service" ] && "/etc/init.d/$service" enable >/dev/null 2>&1 || true
+done
+
+# If a user configuration was preserved/imported, keep its SMS service enabled.
+# This package never creates /etc/config/sms_forwarder or stores a webhook key.
+if [ -s /etc/config/sms_forwarder ] && [ -x /etc/init.d/sms_forwarder ]; then
+	/etc/init.d/sms_forwarder enable >/dev/null 2>&1 || true
+fi
+
+# Existing management listeners are unauthenticated or separately protected;
+# retain the stock WAN input policy and add an explicit WAN-only deny for the
+# modem WebUI/WebSocket and local proxy/DNS management ports.
+uci -q set firewall.h5000m_management_wan=rule
+uci -q set firewall.h5000m_management_wan.name='Reject-H5000M-Management-From-WAN'
+uci -q set firewall.h5000m_management_wan.src='wan'
+uci -q set firewall.h5000m_management_wan.proto='tcp udp'
+uci -q set firewall.h5000m_management_wan.dest_port='7681 8001 8765 9090 7890-7895 7874'
+uci -q set firewall.h5000m_management_wan.target='REJECT'
+uci -q commit firewall
+
+mkdir -p /etc/crontabs
+if ! grep -Fq '/usr/bin/webui-ws-guard.sh' /etc/crontabs/root 2>/dev/null; then
+	printf '%s\n' '*/2 * * * * /usr/bin/webui-ws-guard.sh >/dev/null 2>&1' >> /etc/crontabs/root
+fi
+if ! grep -Fq '/usr/bin/rm502q-at-check.sh' /etc/crontabs/root 2>/dev/null; then
+	printf '%s\n' '*/2 * * * * /usr/bin/rm502q-at-check.sh >/dev/null 2>&1' >> /etc/crontabs/root
+fi
+
+exit 0

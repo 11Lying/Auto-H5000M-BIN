@@ -1,0 +1,72 @@
+#!/bin/sh
+# RM502Q AT split adapted for this ImmortalWrt 25.12.2 image.
+# Hardware roles are stable USB interfaces: 1.3=qmodem/SMS, 1.2=WebUI.
+# USB device address and ttyUSB numbers are discovered dynamically.
+RUNDIR=/run/rm502q-at
+USBROOT=/sys/bus/usb/devices
+LOG=/tmp/rm502q-at-map.log
+log(){ echo "$(date +%H:%M:%S) $*" >> "$LOG"; }
+
+USBDEV=""
+for d in "$USBROOT"/*; do
+  [ -r "$d/idVendor" ] || continue
+  [ "$(cat "$d/idVendor" 2>/dev/null)" = "2c7c" ] || continue
+  [ "$(cat "$d/idProduct" 2>/dev/null)" = "0800" ] || continue
+  [ "$(cat "$d/product" 2>/dev/null)" = "RM502Q-AE" ] || continue
+  [ -z "$USBDEV" ] || { log "ERR multiple RM502Q devices"; exit 3; }
+  USBDEV=${d##*/}
+done
+[ -n "$USBDEV" ] || { log "WAIT RM502Q-AE not present"; exit 4; }
+
+read_tty(){
+  iface="$USBDEV:$1"
+  for dev in /dev/ttyUSB*; do
+    [ -e "$dev" ] || continue
+    t=${dev##*/}
+    resolved=$(readlink -f "/sys/class/tty/$t/device" 2>/dev/null)
+    case "$resolved" in
+      */"$iface"/*) echo "$t"; return 0 ;;
+    esac
+  done
+  return 1
+}
+TTY_Q=$(read_tty 1.3) || TTY_Q=""
+TTY_W=$(read_tty 1.2) || TTY_W=""
+[ -n "$TTY_Q" ] && [ -e "/dev/$TTY_Q" ] || { log "WAIT qmodem interface 1.3 tty missing"; exit 2; }
+[ -n "$TTY_W" ] && [ -e "/dev/$TTY_W" ] || { log "WAIT WebUI interface 1.2 tty missing"; exit 2; }
+[ "$TTY_Q" != "$TTY_W" ] || { log "ERR AT role collision $TTY_Q"; exit 3; }
+
+# Find the live qmodem modem-device section matching the detected USB sysfs path.
+MODEM_CFG=""
+for s in $(uci -q show qmodem | sed -n 's/^qmodem\.\([^.=]*\)=modem-device$/\1/p'); do
+  p=$(uci -q get "qmodem.$s.path")
+  p=${p%/}
+  [ "$p" = "$USBROOT/$USBDEV" ] && MODEM_CFG=$s
+ done
+[ -n "$MODEM_CFG" ] || { log "ERR no qmodem section matches $USBDEV"; exit 5; }
+
+mkdir -p "$RUNDIR"
+QNUM=${TTY_Q#ttyUSB}; WNUM=${TTY_W#ttyUSB}
+printf '%s\n' "$QNUM" > "$RUNDIR/qmodem"
+printf '%s\n' "$WNUM" > "$RUNDIR/webui"
+ln -sf "/dev/$TTY_Q" /dev/rm502q-at-qmodem
+ln -sf "/dev/$TTY_W" /dev/rm502q-at-webui
+
+# The data call uses its existing AT port (normally ttyUSB3). Limit qmodem's
+# eligible AT pool to that role, keeping interface 1.2 exclusive to WebUI.
+changed=0
+[ "$(uci -q get "qmodem.$MODEM_CFG.at_port")" = "/dev/$TTY_Q" ] || { uci set "qmodem.$MODEM_CFG.at_port=/dev/$TTY_Q"; changed=1; }
+# The QModem RPC path must use ubus for the independently isolated AT port.
+[ "$(uci -q get "qmodem.$MODEM_CFG.use_ubus")" = "1" ] || { uci set "qmodem.$MODEM_CFG.use_ubus=1"; changed=1; }
+valid=$(uci -q get "qmodem.$MODEM_CFG.valid_at_ports")
+[ "$valid" = "/dev/$TTY_Q" ] || {
+  uci -q delete "qmodem.$MODEM_CFG.valid_at_ports"
+  uci add_list "qmodem.$MODEM_CFG.valid_at_ports=/dev/$TTY_Q"
+  changed=1
+}
+[ "$changed" = 0 ] || uci commit qmodem
+# Close any transient at-daemon claim on the WebUI-only port; harmless if none is open.
+msg=$(printf '{"at_port":"/dev/%s"}' "$TTY_W")
+ubus call at-daemon close "$msg" >/dev/null 2>&1 || true
+log "OK usb=$USBDEV cfg=$MODEM_CFG qmodem=$TTY_Q(if1.3) webui=$TTY_W(if1.2) valid_at_ports=/dev/$TTY_Q"
+exit 0

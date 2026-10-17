@@ -1,0 +1,30 @@
+#!/bin/sh /etc/rc.common
+USE_PROCD=1
+START=99
+STOP=10
+NAME=modemwebui
+has_rm502q() {
+  for d in /sys/bus/usb/devices/*; do
+    [ -r "$d/idVendor" ] || continue
+    [ "$(cat "$d/idVendor" 2>/dev/null)" = "2c7c" ] || continue
+    [ "$(cat "$d/idProduct" 2>/dev/null)" = "0800" ] && return 0
+  done
+  return 1
+}
+start_service() {
+  has_rm502q || { logger -t modemwebui 'RM502Q not present; not starting'; return 0; }
+  local cfg=/www/webui/webui000/web/config.json
+  [ -f "$cfg" ] || return 1
+  local lan_addr
+  lan_addr=$(uci -q get network.lan.ipaddr)
+  lan_addr=${lan_addr%%/*}
+  [ -n "$lan_addr" ] || lan_addr=192.168.1.1
+  if [ -f "$cfg.bak" ]; then cp -f "$cfg.bak" "$cfg"; fi
+  sed -i "s#192\\.168\\.1\\.1#$lan_addr#g" "$cfg"
+  procd_open_instance
+  procd_set_param command /bin/sh -c "cd /www/webui/webui000 && exec /usr/bin/webuiserver"
+  procd_set_param respawn 3600 5 0
+  procd_set_param stdout 1
+  procd_set_param stderr 1
+  procd_close_instance
+}

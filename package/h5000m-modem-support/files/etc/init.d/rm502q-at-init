@@ -1,0 +1,23 @@
+#!/bin/sh /etc/rc.common
+# Boot-time AT role assignment for this H5000M; does not restart qmodem or WAN.
+START=85
+STOP=15
+map_when_ready() {
+  (
+    i=0
+    while [ "$i" -lt 30 ]; do
+      for d in /sys/bus/usb/devices/*; do
+        [ -r "$d/idVendor" ] || continue
+        if [ "$(cat "$d/idVendor" 2>/dev/null)" = "2c7c" ] && [ "$(cat "$d/idProduct" 2>/dev/null)" = "0800" ]; then
+          sleep 15
+          /usr/bin/rm502q-at-map
+          exit 0
+        fi
+      done
+      i=$((i+1)); sleep 1
+    done
+    logger -t rm502q-at "boot map: modem not found; no changes made"
+  ) >/dev/null 2>&1 &
+}
+start() { map_when_ready; }
+boot() { map_when_ready; }

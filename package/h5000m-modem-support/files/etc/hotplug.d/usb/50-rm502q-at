@@ -1,0 +1,22 @@
+#!/bin/sh
+# RM502Q-AE AT role map after USB (re-)enumeration — path-agnostic (2026-10-13).
+# Old version hardcoded DEVPATH "*1-1*"; the modem now enumerates as 2-1 on this
+# board, so the map was never re-applied after modem USB resets -> qmodem's
+# scanner re-widened valid_at_ports and at-daemon grabbed the WebUI port.
+# This version detects the RM502Q device by its USB IDs (2c7c:0800) in sysfs,
+# so 1-1 / 2-1 / any future layout all work.
+case "${ACTION:-}" in add|bind) ;; *) exit 0 ;; esac
+d="/sys${DEVPATH:-}"
+[ -d "$d" ] || exit 0
+# interface events point at ".../<dev>/<dev>:<cfg>.<if>" — use the device dir
+if [ ! -r "$d/idVendor" ]; then d="${d%/*}"; fi
+[ "$(cat "$d/idVendor" 2>/dev/null)" = "2c7c" ] || exit 0
+[ "$(cat "$d/idProduct" 2>/dev/null)" = "0800" ] || exit 0
+(
+  # qmodem's add scan starts after 8s and can retry every 8s; wait past its
+  # normal retry window so we don't narrow ports before its final scan opens
+  # the WebUI AT port again. The 2-minute checker also closes any late stale FD.
+  sleep 35
+  /usr/bin/rm502q-at-map
+) >/dev/null 2>&1 &
+exit 0
