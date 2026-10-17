@@ -1,0 +1,19 @@
+From: H5000M build audit
+Subject: [PATCH] mtk_eth_soc: guard integrated PPE unwind when mtkhnat owns PPE
+
+The HNAT build disables integrated PPE init/start/stop through the upstream
+999-eth-91 guards. Keep the failure unwind consistent: mtk_ppe_deinit() must
+not run for a PPE instance that this configuration never initialized.
+
+--- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
++++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+@@ -7777,7 +7777,9 @@
+ 		mtk_napi_del(eth);
+ 		free_netdev(eth->dummy_dev);
+ 	}
++#if !defined(CONFIG_NET_MEDIATEK_HNAT) && !defined(CONFIG_NET_MEDIATEK_HNAT_MODULE)
+ 	mtk_ppe_deinit(eth);
++#endif
+ 	mtk_release_all_muxes(eth);
+ 	mtk_mdio_cleanup(eth);
+ err_free_dev:

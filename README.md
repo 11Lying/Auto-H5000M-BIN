@@ -1,4 +1,4 @@
-# Hiveton H5000M — ImmortalWrt 25.12 integrated PPE/flow-offload build
+# Hiveton H5000M — ImmortalWrt 25.12 HNAT + USB/WWAN offload build
 
 This repository builds a reproducible Hiveton H5000M image from the pinned
 `chasey-dev/immortalwrt-mt798x-rebase` 25.12 tree that matches the audited
@@ -21,16 +21,21 @@ chasey-dev tree.
 | QModem | stable `v3.3.0`, commit `5cc80e5f9fc218cd50bef9749dc7d0027e8b3072` |
 
 The OpenWrt base remains pinned at `468e251661cb46face4ca0c961238282a6eaaa0a`.
-The upstream 25.12 branch has since advanced to `03eb30617955519e35845838c6255ebe687eb717` (two commits); the only code change in that range adjusts the closed `wifi_utility` EEPROM backend for multi-card devices. This build uses open-source mt76, so that vendor-only change is not imported.
+The upstream `25.12` and `25.12-dev` refs currently point to
+`03eb30617955519e35845838c6255ebe687eb717`, two commits ahead. That range only
+changes the closed `wifi_utility` EEPROM backend for multi-card devices; this
+build uses open-source mt76, so that vendor-only change is not relevant. The
+older base remains pinned to keep the build reproducible.
 
 The kernel tarball alone is advanced to upstream stable `v6.12.113`
 (commit `7fdb7c1824a1f9979d648d7ae28ac446bcee9c6e`, SHA256
 `e09b6727e5c521253f0d41694900b9c38fb7604db7d35238a8197aa9f7de2428`). This
 stable release includes netfilter flowtable/conntrack offload-bit fixes, an
 mt7996 WED-RRO event-layout fix, and an mtk_eth_soc probe-ordering fix. The
-kernel pin is verified in the source preflight, and the complete 6.12 target
-patch queue has additionally passed a local `make target/linux/prepare` +
-defconfig + Ethernet-object compile against this exact tarball; the full image
+kernel pin is verified in the source preflight. The previous PPE rollback
+passed a local `make target/linux/prepare` and Ethernet-object compile against
+this tarball; the HNAT-specific additions in this branch must pass a fresh
+`target/linux/prepare`/module compile on the PC before flashing. The full image
 build runs via `scripts/local-build.sh`.
 
 The base's `788-v7.3-net-usb-qmi_wwan-add-Quectel-EG120K-EA.patch` is also
@@ -44,144 +49,110 @@ The same stable release also upstreamed the NAPI/dummy-netdev registration
 ordering fix carried by the base's `999-eth-07`. The original patch is retained
 outside the active queue; `974` keeps only the `mtk_napi_del()` helper and
 cleanup call sites required by the 6.12 RSS patch `999-eth-09`. The original
-`999-eth-91` HNAT integration patch is also preserved. Patch `975` omits only
-its now-stale HNAT-specific probe-unwind guard; the independent HNAT module is
-not selected, and the integrated PPE remains the only supported route here.
+`999-eth-91` HNAT integration patch is preserved and used. Its final unwind
+hunk is rebased for 6.12.113: `975` removes the stale old-context hunk, while
+`999-eth-96` reinstates the HNAT conditional around `mtk_ppe_deinit()` at the
+new source location. The HNAT module is selected as the sole PPE owner; the
+integrated PPE path is deliberately not started at the same time.
 
-The pinned base supplies the H5000M board DTS, MT7987 PHY firmware, USB3,
-image definition and partition/sysupgrade logic. The base does not contain the
-upstream `package/kernel/mt76` package, so this repository vendors and stages
-that exact package. The base's MTK Ethernet/PPE integration is retained;
-no closed-source mtwifi tree or independent mtkhnat probe is selected.
+The pinned base supplies the H5000M DTS, MT7987 PHY firmware, USB3, image
+layout, and sysupgrade logic. This build vendors the official ImmortalWrt 25.12
+`mt76` package for MT7992 Wi-Fi; no closed-source mtwifi tree is selected.
 
-## Hardware-acceleration path
+## HNAT/PPE and USB/WWAN offload path
 
-The active build follows the pinned tree's integrated 6.12 route: MT7987
-`mtk_eth_soc` initializes its two PPE
-instances (`offload_version=2`, `ppe_num=2`), and firewall4 uses
-`kmod-nft-offload` with `flow_offloading_hw=1`.
+The HNAT variant selects the official `kmod-mediatek_hnat` driver as the sole
+owner of the MT7987's two PPEs. The upstream `999-eth-91` integration guards
+suppress `mtk_eth_soc`'s integrated PPE probe/start/stop path when
+`CONFIG_NET_MEDIATEK_HNAT` is enabled. Running both owners would be unsafe.
+The ordinary `mtk_eth_soc` Ethernet/DMA driver and mt76/WED Wi-Fi path remain
+in use.
 
-The reference tag `v2026.08.19-h5000m-pro` peels to `219943d3499eb9d76d0d41ca1e473f183aced98c` (also current `main`) and targets Linux 6.18.57. Its DTS has only the four FE IRQs 196–199. That IRQ list cannot be copied into this
-6.12 tree: this pinned 6.12 RSS patch explicitly calls
-`platform_get_irq(pdev, 0..3)` for four PDMA IRQs and
-`platform_get_irq(pdev, 4..7)` for four FE IRQs. Therefore the active `973`
-overlay adds 189–192 before 196–199. The 189–192 values also occur in the pinned tree's MT7987 kernel DTS patch. This is based on the 6.12 driver request sequence and the same tree's SoC DTS, not on the 6.18 reference DTS alone. The final image must still be checked for all eight IRQs in its compiled DTB.
+The USB/WWAN support is not just a config flag. The selected source and board
+overlays include:
 
-The separate `mtkhnat.ko` route is **not selected**. The 6.12
-`999-eth-91` integration patch disables the normal integrated PPE probe/start
-path whenever `CONFIG_NET_MEDIATEK_HNAT` is enabled; enabling both routes was
-therefore unsafe. The previous independent-HNAT patches remain under
-`patches/optional-independent-hnat/` as a preserved reference, but the build
-script does not apply them.
+- Upstream `999-zzz-5111` external-device ingress/PPD handling and
+  `999-zzz-5112` `ext-devices-prefix` matching.
+- The H5000M HNAT v5 DTS node (`mtketh-soc`, two PPEs, flow-check IRQ 198) with
+  prefixes `usb`, `wwan`, and `rmnet`. The live RM502Q QMI/QMAP netdev name
+  `wwan0_1` matches the `wwan` prefix.
+- The official `hnat-detect` hotplug utility. It resolves fw4 zones and creates
+  the Rx-PPD bridge path for an external USB/WWAN WAN; it deliberately does
+  not pretend the USB netdev is a physical GMAC.
+- `CONFIG_MEDIATEK_NETSYS_V3=y` for HNAT v5's MT7987 register/entry layout,
+  IPv6, conntrack/NAT/flow-table support, and `kmod-nft-offload`.
+- The 6.12.113 Ethernet IRQ correction: PDMA IRQs 189–192 followed by FE IRQs
+  196–199. The separate HNAT flow-check IRQ is 198. Both resources are checked
+  in the DTS and build validation.
+- A bounded HNAT probe/teardown safety patch, ordered module autoload, and an
+  unwind guard so the non-owner integrated PPE is not deinitialized.
 
-Active patches:
+First boot requests fw4 software/hardware flow offload; full-cone remains off.
+The source config, package manifest, HNAT DTS properties, and patch set are
+checked before publishing an image. OpenClash/Mihomo TUN processing still runs
+in userspace; HNAT cannot offload the proxy's userspace encryption work.
 
-- `968`: pins the official Linux 6.12.113 tarball and SHA256.
-- `969`: applies the tested 8-hour RM502Q SMS timestamp correction to the pinned QModem source without replacing the upstream script.
-- `970/971/972`: fan boot-duty and early pwm-fan loading; thermal levels/trips remain unchanged.
-- `973`: only the 6.12 Ethernet RSS/PDMA IRQ resource correction.
-- `974`: rebases the NAPI cleanup helper/call sites needed by RSS onto 6.12.113
-  while preserving the stable kernel's upstream dummy-netdev ordering fix.
-- `975`: removes the obsolete HNAT-only cleanup guard from the patch queue for
-  this integrated-PPE build; the original patch file remains preserved in the
-  build source outside the active queue.
-- `vendor/mt76/patches/0118`: exact upstream MT7996 WED-RRO BA-delete event
-  layout fix backported from `bd49f063...`; it corrects the 12-byte firmware
-  record size in the pinned March mt76 source without a broad driver update.
-- `999-eth-94`: guard the vendor GMAC/XFI MIB readers against sparse/disabled
-  MAC indices, absent `hw_stats`, and missing SGMII/USXGMII PCS pointers. It
-  snapshots accumulated MAC counters under the existing per-MAC stats lock,
-  formats after releasing the lock, and corrects the source-confirmed swapped
-  RX broadcast/multicast drop labels.
-- `999-eth-95`: create debugfs/proc entries after internal storage and NAPI are ready but before `register_netdev()` exposes traffic; fail probe only if required storage allocation fails; drain entries on registration failure and removal.
+**Build-level support is not proof of live hardware acceleration.** After
+flashing, verify: Ethernet and HNAT drivers bind without IRQ/Oops errors;
+`hnat-detect` identifies the USB/WWAN WAN and creates Rx-PPD; HNAT/PPE counters
+and entries increase during eligible `wwan0_1` upload/download traffic; IPv4
+and IPv6 forwarding work; and Wi-Fi/WED, QModem/SMS/WebUI, OpenClash, and fan
+control remain healthy. The build collector cannot claim these runtime results
+without testing on the actual router.
 
-The basis for `999-eth-94` is the pinned 6.12 vendor debugfs implementation:
-`mtk_eth_debugfs_mac_cnt_show()` iterates `MTK_GMAC_ID_MAX` and dereferences
-`eth->mac[i]` and `hw_stats` without checking them, while the H5000M DTS leaves
-GMAC2 absent. The captured Oops PC is inside this function
-(`+0x78/0x280`), which is consistent with that unsafe path. The retained Oops
-record does not include fault-address/register details, so this project does
-not claim to have proven the exact faulting instruction; the patch guards the
-verified source-level defect for every sparse index. The same audit found
-unguarded GMAC lookups in the SGMII/USXGMII debugfs helpers and a swapped pair
-of XFI counter labels; both are covered by the same evidence-based patch.
+Active acceleration-related patches include:
 
-WED/RRO is not forced. The MT7987 WED provider, IRQ 205, Ethernet
-`mediatek,wed = <&wed0>` binding and kernel WED option remain from the pinned
-source, but no extra mt76 WED module parameter is injected. The separately
-reviewed `vendor/mt76/patches/0118` fixes the confirmed 12-byte WED-RRO BA-delete
-event layout; it does not enable RRO or change the driver source baseline.
+- `973`: MT7987 6.12 RSS/PDMA/FE IRQ resources.
+- `975`: rebases the vendor 999-eth-91 patch for 6.12.113; original is preserved.
+- `976/977/978`: HNAT probe safety, module autoload, and H5000M USB/WWAN HNAT DTS.
+- `999-eth-94/95`: sparse-GMAC debugfs safety and lifecycle fixes.
+- `999-eth-96`: skips integrated-PPE teardown when HNAT owns the PPE.
+- `vendor/mt76/patches/0118`: targeted MT7996 WED-RRO event-layout fix; RRO is not forced.
 
-The image explicitly selects `kmod-nf-conntrack`, `kmod-nf-nat`, `kmod-nf-flow`
-and `kmod-nft-offload`. The collector verifies the expanded `.config` and the
-final image manifest. It also rejects an accidental `kmod-mediatek_hnat` or
-`hnat-detect` package.
+The Oops audit remains separately documented: the source-level sparse-GMAC
+MIB bug is guarded, but the original dump lacked enough registers to claim an
+exact faulting instruction.
 
-This proves only the build route and package closure, not runtime PPE counters.
-USB QMI/QMAP `wwan0_1` is deliberately **not claimed** as hardware-offloaded;
-its compatibility with the Ethernet PPE must be tested separately after a
-successful boot. OpenClash/Mihomo TUN traffic remains userspace traffic.
+## Packaged services and first boot
 
-The selected application stack includes OpenClash, SmartDNS, `luci-app-qmodem-next`,
-`h5000m-modem-support`, and `h5000m-network-guard`. QModem's pinned stable feed
-supplies the modem core, AT daemon, serial/QMI dependencies, Quectel vendor QMI
-WWAN driver and SMS forwarder. The separate ModemWebUI is shipped by the
-H5000M package at its existing HTTP/WebSocket ports; the legacy Lua QModem UI
-and ModemManager remain unselected. The `h5000m-network-guard` package restores
-the existing IPv6 LAN-route and foreign-client-v6 fast-fail policy, without
-changing DNS targets or OpenClash rules.
+The image includes OpenClash, SmartDNS plus LuCI, QModem Next, the standalone
+ModemWebUI/AT-isolation/QSCAN support package, SMS-forwarder-next, the HNAT
+interface detector, fan control, and IPv6 network guard. OpenClash node
+subscriptions, credentials, dashboard secrets, and the WeCom webhook key are
+not embedded. SmartDNS is packaged but the user's SmartDNS-to-OpenClash DNS
+chain must be restored/configured separately. The first-boot packages do not
+rewrite WAN, DNS, OpenClash rules, Wi-Fi credentials, or private UCI settings.
 
-The modem package contains the previously deployed WebUI v8/QSCAN frontend,
-AT role isolation, QMI wedge recovery, and generic WeCom adapter. Its first-boot
-setup enables the services, adds a WAN-only reject rule for management ports,
-and does not create a webhook config or rewrite WAN/DNS/OpenClash UCI. Private
-OpenClash subscriptions, node credentials, dashboard passwords, and WeCom
-keys are deliberately excluded from this public repository and firmware; they
-must be restored from the user's private backup/configuration.
-
-The `luci-app-smartdns` and SmartDNS engine are packaged, but this public image
-intentionally does not ship `/etc/config/openclash`, subscription URLs, node
-credentials, dashboard secrets, or a user-specific SmartDNS/Mihomo DNS chain.
-Consequently, selecting the packages is not a claim that the SmartDNS →
-OpenClash runtime chain is already configured. Restore those private settings
-from the user's backup after installation; the build does not rewrite DNS
-servers, domain rules, strategy groups, or subscriptions.
-
-The image retains the official H5000M device packages and adds these explicit data-path and application packages:
-
-- Official: `kmod-hwmon-pwmfan`, `kmod-usb3`, `mt7987-2p5g-phy-firmware`, `kmod-mt7996e`, `kmod-mt7992-23-firmware`, and filesystem/automount utilities.
-- Added: `kmod-nf-conntrack`, `kmod-nf-nat`, `kmod-nf-flow`, `kmod-nft-offload`, SmartDNS, SQM, BBR, `h5000m-modem-support`, and `h5000m-network-guard`.
-
-The first-boot defaults request fw4 software+hardware flow offload. This is
-configuration for the integrated PPE path, not proof that USB/QMI/QMAP traffic
-will enter PPE. The network-guard first-boot defaults add only the known IPv6
-route/firewall includes and `ra_default=2`; they do not alter WAN or DNS targets.
-Runtime confirmation requires Ethernet probe success, driver binding and
-increasing PPE/flowtable counters.
+BBR is enabled as the default TCP congestion control on first boot. SQM/cake
+is installed but off by default because shaping can bypass hardware offload.
+`irqbalance` is packaged; verify its service after first boot. `kmod-cryptodev`
+and `kmod-tls` are present as compatibility interfaces, not a claim of Mihomo
+proxy acceleration. CPUFreq retains the upstream four OPPs (500/1300/1600/2000
+MHz) and schedutil; no deep-idle support is claimed.
 
 ## Community patch audit
 
-| Patch / change | Origin and original purpose | Pinned 25.12 integrated-PPE status | Decision |
+| Patch / change | Origin and purpose | HNAT+USB build status | Decision |
 |---|---|---|---|
 | H5000M DTS replacement | Old vendor/community trees | Official DTS already exists and is used by the official device profile | **Not imported** |
-| `mtwifi-apcli-active-only.patch` | Old closed MediaTek mtwifi tree | Not used by the pinned 25.12 integrated-PPE build | **Not imported** |
-| old mtwifi/mtwifi-cfg edits | Vendor Wi-Fi SDK integration | Not part of the pinned 25.12 integrated-PPE build | **Not imported** |
-| HNAT local-destination patch | Old vendor HNAT behaviour workaround | No board-specific requirement identified for this integration | **Not imported** |
-| QMI WWAN 6.6 patch | Old kernel/vendor QMI tree | Official baseline is kernel 6.12; QModem stable supplies its own compatible vendor QMI package | **Not imported** |
+| `mtwifi-apcli-active-only.patch` | Old closed MediaTek mtwifi tree | Build uses open-source mt76 | **Not imported** |
+| old mtwifi/mtwifi-cfg edits | Vendor Wi-Fi SDK integration | Not part of the mt76 build | **Not imported** |
+| HNAT USB/WWAN ext-prefix + Rx-PPD | Upstream MediaTek HNAT patches | Included; runtime offload still requires counter validation | **Selected** |
+| HNAT local-destination patch | Old vendor HNAT behaviour workaround | No H5000M-specific evidence it is required | **Not imported** |
+| QMI WWAN 6.6 patch | Old kernel/vendor QMI tree | Kernel is 6.12.113; QModem supplies the RM502Q driver | **Not imported** |
 | MT7992 firmware/eeprom changes | Vendor Wi-Fi tree changes | Upstream mt76 and its MT7992 firmware are supplied by `vendor/mt76`; the DTS binds `mediatek,mt76` | **No vendor EEPROM changes** |
 | fan startup patch | Official 6.12 `pwm-fan` probes at 100% and has no boot-duty property | Not upstream; verified necessary for the requested startup-noise fix | **Minimal patch only** |
 
 ## Full-cone NAT decision
 
-The pinned firewall4/fullconenat-nft source is real and is packaged as a
-firewall4 dependency, but full-cone rules are disabled in the H5000M first-boot
-defaults. The nft full-cone expression is UDP-oriented and has not been proven
-compatible with this MT7987 integrated PPE path; enabling it by default would
-trade away the conservative hardware-offload path for an unverified behavior. It remains
+The pinned firewall4/fullconenat-nft source is packaged, but full-cone rules
+are disabled in the H5000M first-boot defaults. The nft full-cone expression is UDP-oriented and has not been proven
+compatible with the independent MT7987 HNAT path; enabling it by default would
+add an unverified behavior to the initial validation matrix. It remains
 available for a separately tested UCI decision.
 
 
-The official H5000M DTS remains the base. A narrowly-scoped board overlay adds `pwm-fan,boot-duty = <89>` (about 35% of 255) to prevent the upstream driver's 100% probe duty. The upstream `pwm-fan` driver gets the matching optional-property patch; the stock thermal cooling levels and critical trips are unchanged. A module autoload patch loads pwm-fan in the early module pass.
+The official H5000M DTS remains the base. Narrowly-scoped overlays add the HNAT node and `pwm-fan,boot-duty = <89>` (about 35% of 255) to prevent the upstream driver's 100% probe duty. The upstream `pwm-fan` driver gets the matching optional-property patch; the stock thermal cooling levels and critical trips are unchanged. A module autoload patch loads pwm-fan in the early module pass.
 
 The local `h5000m-fancontrol` package starts at init priority 15. It applies
 the configured temperature curve, raises PWM immediately when the requested
@@ -199,21 +170,20 @@ still require a post-flash hardware check.
 On top of the stock device packages:
 
 - **BBR** (`kmod-tcp-bbr`) — set as default at first boot via uci-defaults (`91-h5000m-bbr` writes `/etc/sysctl.d/10-bbr.conf`). It is software TCP congestion control, useful for variable-latency 5G links and the proxy's outer TCP socket; it is not hardware encryption/offload.
-- **OpenClash/Mihomo TUN proxy traffic is not integrated-PPE-accelerated end-to-end**: packets pass through userspace proxy processing and encryption. The integrated PPE may accelerate eligible direct Ethernet flows after successful runtime initialization; this repository does not claim USB/QMI/QMAP or proxy hardware offload. `kmod-cryptodev` and `kmod-tls` are retained as kernel interfaces for compatible applications; Mihomo does not automatically consume them, so they are not claimed as proxy acceleration.
+- **HNAT** is wired for eligible forwarded flows, including the USB/WWAN path, but that path remains a post-flash validation item. OpenClash/Mihomo TUN traffic still traverses userspace proxy processing/encryption and is not accelerated end-to-end by HNAT. `kmod-cryptodev` and `kmod-tls` are kernel interfaces for compatible applications; Mihomo does not automatically consume them.
 - **SQM** (`luci-app-sqm`, cake) — keeps latency stable when the 5G uplink jitters. Installed but not enabled; set per-link speeds in LuCI after flashing.
 - **irqbalance** — selected to distribute hardware interrupts across CPU cores; verify its service state after first boot.
 
 Deliberately not enabled by default: full-cone NAT (the real `kmod-nft-fullcone`
 package is included because firewall4 provides it, but H5000M defaults set
-`fullcone=0` and `fullcone6=0` until PPE compatibility is separately proven).
+`fullcone=0` and `fullcone6=0` until HNAT compatibility is separately proven).
 EHT160 wireless tuning is also not forced; the firmware keeps stock wireless
 runtime defaults.
 
-A read-only `/usr/bin/h5000m-audit` reports board, Wi-Fi/WED, integrated PPE,
-flow-offload, USB/QMI, BBR, OpenClash and fan state. The first-boot defaults
-request fw4 software and hardware flow offload; this is only configuration.
-Runtime proof requires Ethernet driver binding plus increasing PPE/flowtable
-counters under eligible traffic.
+A read-only `/usr/bin/h5000m-audit` reports board, Wi-Fi/WED, HNAT/PPE,
+flow-offload, USB/QMI, BBR, OpenClash and fan state. Runtime proof requires the
+HNAT driver to bind and PPE counters/entries to increase under eligible traffic,
+including a controlled USB/WWAN forwarding test.
 
 ## CPUFreq
 
@@ -247,13 +217,13 @@ source tree, so reusing a previously built tree requires a reviewed cleanup;
 use a new `SOURCE_DIR` instead. The source/download cache and ccache can be
 shared safely.
 
-The script refuses to proceed unless the pinned source commit, pinned feeds, H5000M profile, mt76 stack and allowed patch set pass `scripts/verify-config.sh`.
+The script refuses to proceed unless the pinned source commit, pinned feeds, H5000M profile, mt76/HNAT stack, USB/WWAN DTS path, and allowed patch set pass `scripts/verify-config.sh`.
 
 ## GitHub Actions
 
-- Pushes to `main` and `audit-upgrade-2026-10` run the static/config validation job.
-- `workflow_dispatch` with `confirm_firmware_build=true` runs the H5000M integrated-PPE firmware build.
+- Pushes to `main`, `audit-upgrade-2026-10`, and `hnat-usb-experimental-20261017` run the static/config validation job.
+- `workflow_dispatch` with `confirm_firmware_build=true` runs the H5000M HNAT/USB firmware build.
 - The build artifact contains images, expanded `.config`, manifest, source/feed/plugin provenance and SHA256 sums.
 - Cache keys include the pinned source commit, target, config hash and patch-set hash.
 
-The vendor/closed-source Wi-Fi branch is intentionally **not built**. It would require a separate non-official kernel/driver integration and is excluded from the stable baseline.
+The vendor/closed-source Wi-Fi branch is intentionally **not built**. The PPE-only rollback remains on `audit-upgrade-2026-10`; the HNAT/USB variant is isolated on its own branch. The public build contains no user credentials, subscriptions, Wi-Fi key, or webhook secret.

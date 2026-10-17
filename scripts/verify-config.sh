@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Static verification of a chasey-dev 25.12 integrated-PPE / H5000M build tree.
+# Static verification of a chasey-dev 25.12 HNAT/USB / H5000M build tree.
 #
 # Runs before the compile. Every check here exists because of a concrete
 # failure mode that was hit before, or because it guards a requirement in the
@@ -97,9 +97,9 @@ if git -C "$SRC" show HEAD:target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth
      "$hnat91_tmp/target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch" && \
    [ -s "$hnat91_saved" ] && \
    cmp -s "$hnat91_tmp/target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch" "$hnat91_saved" && \
-   patch -d "$hnat91_tmp" -p1 --forward --silent < "$ROOT_DIR/patches/975-mtkhnat91-integrated-ppe-6.12.113.patch" >/dev/null 2>&1 && \
+   patch -d "$hnat91_tmp" -p1 --forward --silent < "$ROOT_DIR/patches/975-mtkhnat91-6.12.113-compat.patch" >/dev/null 2>&1 && \
    cmp -s "$hnat91_tmp/target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch" "$hnat91"; then
-  pass "999-eth-91 original preserved; only the stable-incompatible, unselected HNAT unwind hunk is omitted"
+  pass "999-eth-91 original preserved; stale stable-kernel hunk rebased separately for selected HNAT"
 else
   fail "999-eth-91 stable compatibility edit differs from its pinned original"
 fi
@@ -166,18 +166,19 @@ grep -qx 'CONFIG_TARGET_PROFILE="DEVICE_hiveton_h5000m"' "$CFG" \
 	|| fail "CONFIG_TARGET_PROFILE is not DEVICE_hiveton_h5000m"
 
 # ---------------------------------------------------------------------------
-sect "4. DTS comes from upstream"
+sect "4. H5000M DTS / HNAT v5"
 DTS="$SRC/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts"
 if [ -f "$DTS" ]; then
-	pass "official DTS present"
-	# The only permitted local change is the documented boot-duty block.
-	if grep -q 'pwm-fan,boot-duty = <89>' "$DTS" && grep -q 'compatible = "mediatek,mt76"' "$DTS"; then
-	pass "official DTS retained; only reviewed fan and Ethernet IRQ overlays are present"
+  if grep -q 'pwm-fan,boot-duty = <89>' "$DTS" && \
+     grep -q 'compatible = "mediatek,mt76"' "$DTS" && \
+     grep -q 'compatible = "mediatek,mtk-hnat_v5"' "$DTS" && \
+     grep -q 'mtketh-soc = <&eth>' "$DTS"; then
+    pass "official H5000M DTS retained with reviewed fan handover and HNAT v5 overlay"
+  else
+    fail "H5000M DTS missing official mt76, fan boot-duty or HNAT v5 binding"
+  fi
 else
-	fail "H5000M DTS fan handover or mt76 binding missing"
-fi
-else
-	fail "official DTS missing at $DTS"
+  fail "official DTS missing at $DTS"
 fi
 
 # Ethernet IRQ resources must match the RSS/PDMA driver in this pinned tree.
@@ -200,11 +201,10 @@ else
 	fail "RSS/PDMA IRQ acquisition mapping is missing or changed"
 fi
 if grep -q '[[:space:]]eth: ethernet@15100000' "$ETH_DTS" && \
-   grep -q '^&eth {' "$DTS" && grep -q '[[:space:]]status = "okay";' "$DTS" && \
-   ! grep -q 'mediatek,mtk-hnat_v5' "$DTS"; then
-	pass "H5000M uses the upstream Ethernet node without the independent mtkhnat probe"
+   grep -q '^&eth {' "$DTS" && grep -q '[[:space:]]status = "okay";' "$DTS"; then
+	pass "H5000M retains the upstream Ethernet provider node required by mtkhnat"
 else
-	fail "H5000M DTS contains an unexpected independent HNAT node or lacks Ethernet enablement"
+	fail "H5000M DTS lacks the upstream Ethernet provider binding"
 fi
 
 # 973 is intentionally the only expected change to mt7987.dtsi. Compare the
@@ -290,11 +290,11 @@ if [ -d "$SRC/package/mtk" ]; then
 else
 	pass "no MTK vendor feed present"
 fi
-extra="$(find "$ROOT_DIR/patches" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' 2>/dev/null | grep -vE '^(968-linux-6[.]12[.]113|969-qmodem-sms-timestamp-utc8|970-pwm-fan-boot-duty|971-hwmon-pwmfan-boot-autoload|972-h5000m-fan-boot-duty|973-h5000m-ethernet-rss-irqs|974-mtk-eth-napi-helper-6[.]12[.]113|975-mtkhnat91-integrated-ppe-6[.]12[.]113|999-eth-94-mtk_eth-debugfs-mib-safe|999-eth-95-mtk_eth-debugfs-lifecycle)\.patch$' || true)"
-if [ -z "$extra" ] && [ -f "$ROOT_DIR/patches/optional-independent-hnat/README.md" ]; then
-	pass "active patch allowlist is exact; independent HNAT patches are retained but disabled"
+extra="$(find "$ROOT_DIR/patches" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' 2>/dev/null | grep -vE '^(968-linux-6[.]12[.]113|969-qmodem-sms-timestamp-utc8|970-pwm-fan-boot-duty|971-hwmon-pwmfan-boot-autoload|972-h5000m-fan-boot-duty|973-h5000m-ethernet-rss-irqs|974-mtk-eth-napi-helper-6[.]12[.]113|975-mtkhnat91-6[.]12[.]113-compat|976-mtkhnat-probe-safe|977-mtkhnat-autoload|978-h5000m-hnat-usb-node|999-eth-94-mtk_eth-debugfs-mib-safe|999-eth-95-mtk_eth-debugfs-lifecycle|999-eth-96-hnat-ppe-unwind-guard)\.patch$' || true)"
+if [ -z "$extra" ]; then
+	pass "active patch allowlist is exact, including HNAT/USB safety and DTS patches"
 else
-	fail "unexpected active patch files or missing disabled-HNAT note: $(echo "$extra" | tr '\n' ' ')"
+	fail "unexpected active patch files: $(echo "$extra" | tr '\n' ' ')"
 fi
 # These patches run after vendor 90/91/93. 90 added a loop over all GMAC IDs
 # without skipping disabled DT MACs, and created debugfs/proc files before probe
@@ -425,59 +425,90 @@ fi
 for sym in PACKAGE_kmod-mt7996e PACKAGE_kmod-mt76-core PACKAGE_kmod-mt7992-23-firmware; do
 	cfg_has "$sym" && pass "wifi: $sym" || fail "wifi dependency missing: $sym"
 done
-# the DTS binds this device to the in-tree mt76 driver
+# HNAT owns the two PPEs in this image; integrated mtk_ppe is suppressed by
+# the official 999-eth-91 compatibility guards whenever HNAT is selected.
 KCFG="$SRC/target/linux/mediatek/filogic/config-6.12"
-if grep -qx 'CONFIG_NET_MEDIATEK_HNAT=y' "$KCFG" || grep -qx 'CONFIG_NET_MEDIATEK_HNAT=m' "$KCFG"; then
-  fail "independent NET_MEDIATEK_HNAT symbol enabled alongside the integrated PPE path"
+if cfg_has PACKAGE_kmod-mediatek_hnat; then
+  pass "independent mtkhnat kernel module package selected"
 else
-  pass "independent NET_MEDIATEK_HNAT kernel symbol remains disabled"
+  fail "PACKAGE_kmod-mediatek_hnat missing from expanded package config"
+fi
+HNAT_PKG_MK="$SRC/package/kernel/linux/modules/netdevices.mk"
+HNAT_91="$SRC/target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch"
+if grep -q 'define KernelPackage/mediatek_hnat' "$HNAT_PKG_MK" && \
+   grep -q 'CONFIG_NET_MEDIATEK_HNAT' "$HNAT_PKG_MK" && \
+   grep -q 'mtk_hnat/mtkhnat.ko' "$HNAT_PKG_MK" && \
+   grep -q 'config NET_MEDIATEK_HNAT' "$HNAT_91"; then
+  pass "upstream HNAT KernelPackage maps Kconfig to mtkhnat.ko"
+else
+  fail "HNAT package/Kconfig/module mapping is incomplete"
+fi
+if grep -qx 'CONFIG_MEDIATEK_NETSYS_V3=y' "$KCFG" && grep -qx 'CONFIG_IPV6=y' "$KCFG"; then
+  pass "NETSYS v3 HNAT v5 layout and IPv6 are enabled in the kernel fragment"
+else
+  fail "HNAT v5 requires NETSYS v3 and IPv6 kernel configuration"
 fi
 for sym in CONFIG_NET_MEDIATEK_SOC CONFIG_NET_MEDIATEK_SOC_WED; do
   if grep -qx "$sym=y" "$KCFG"; then pass "kernel: $sym"; else fail "kernel config missing $sym"; fi
 done
-if grep -q '\.ppe_num = 2' "$SRC/target/linux/mediatek/patches-6.12/750-net-ethernet-mtk_eth_soc-add-mt7987-support.patch"; then
-  pass "official mtk_eth_soc/PPE integration present"
-else
-  fail "MediaTek PPE integration source missing"
-fi
-# The active route is the integrated 6.12 mtk_eth_soc/mtk_ppe path. The
-# vendor 999-eth-91 patch explicitly disables integrated PPE start/stop/probe
-# when CONFIG_NET_MEDIATEK_HNAT is enabled, so the separate mtkhnat package is
-# intentionally absent from this image.
-if cfg_absent PACKAGE_kmod-mediatek_hnat && cfg_absent PACKAGE_hnat-detect; then
-  pass "independent mtkhnat/hnat-detect packages are not selected"
-else
-  fail "independent mtkhnat route was selected; it conflicts with integrated PPE"
-fi
-for sym in PACKAGE_kmod-nf-conntrack PACKAGE_kmod-nf-nat PACKAGE_kmod-nf-flow PACKAGE_kmod-nft-offload; do
-  cfg_has "$sym" && pass "$sym selected for integrated PPE/nft flow offload" || fail "$sym missing"
+for sym in PACKAGE_kmod-mediatek_hnat PACKAGE_hnat-detect PACKAGE_kmod-nf-conntrack \
+          PACKAGE_kmod-nf-nat PACKAGE_kmod-nf-flow PACKAGE_kmod-nft-offload; do
+  cfg_has "$sym" && pass "$sym selected for HNAT/fw4 offload" || fail "$sym missing"
 done
-cfg_has PACKAGE_kmod-nft-fullcone && pass "real nft full-cone module is packaged but disabled by default" || fail "nft full-cone package missing"
-if grep -q '\.offload_version = 2' "$SRC/target/linux/mediatek/patches-6.12/750-net-ethernet-mtk_eth_soc-add-mt7987-support.patch" && \
-   grep -q '\.ppe_num = 2' "$SRC/target/linux/mediatek/patches-6.12/750-net-ethernet-mtk_eth_soc-add-mt7987-support.patch" && \
-   grep -q 'CONFIG_NET_MEDIATEK_HNAT' "$SRC/target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch" && \
-   grep -q '!defined(CONFIG_NET_MEDIATEK_HNAT)' "$SRC/target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch"; then
-  pass "MT7987 integrated PPE is selected and independent-HNAT conflict is documented in source"
+if grep -q 'CONFIG_NET_MEDIATEK_HNAT' "$SRC/target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch" && \
+   grep -q '!defined(CONFIG_NET_MEDIATEK_HNAT)' "$SRC/target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch" && \
+   [ -s "$SRC/target/linux/mediatek/patches-6.12/999-eth-96-hnat-ppe-unwind-guard.patch" ]; then
+  pass "exactly one PPE owner: official integrated PPE init is gated and HNAT unwind is guarded"
 else
-  fail "MT7987 integrated PPE source/Kconfig conflict check is incomplete"
+  fail "HNAT/integrated-PPE mutual exclusion or unwind guard is missing"
 fi
-if ! grep -q 'mediatek,mtk-hnat_v5' "$DTS"; then
-  pass "H5000M DTS does not add the independent mtkhnat probe node"
+if grep -q 'compatible = "mediatek,mtk-hnat_v5"' "$DTS" && \
+   grep -q 'mtketh-soc = <&eth>' "$DTS" && \
+   grep -q 'mtketh-ppe-num = <2>' "$DTS" && \
+   grep -q 'ext-devices-prefix = "usb", "wwan", "rmnet"' "$DTS"; then
+  pass "H5000M HNAT v5 DTS node registers two PPEs and USB/WWAN/RMNET prefixes"
 else
-  fail "independent mtkhnat DTS node unexpectedly present"
+  fail "H5000M HNAT node or external-interface prefixes are incomplete"
 fi
-# On hnat-6.12 branch, closed WiFi is NOT available (no MT7992 in SDK),
-# while Ethernet acceleration comes from the integrated PPE path. Only forbid
-# the unrelated closed WiFi/WARP packages.
-if grep -q 'CONFIG_PACKAGE_kmod-mt_wifi7=y' "$CFG" || grep -q 'CONFIG_PACKAGE_kmod-warp=y'; then
-  fail "forbidden vendor Wi-Fi/WARP package enabled (no MT7992 support)"
+if grep -q '189 IRQ_TYPE_LEVEL_HIGH' "$ROOT_DIR/patches/973-h5000m-ethernet-rss-irqs.patch" && \
+   grep -q '192 IRQ_TYPE_LEVEL_HIGH' "$ROOT_DIR/patches/973-h5000m-ethernet-rss-irqs.patch" && \
+   grep -q 'interrupts = <GIC_SPI 198 IRQ_TYPE_LEVEL_HIGH>' "$DTS"; then
+  pass "MT7987 PDMA/FE IRQ correction and HNAT flow-check IRQ are present"
 else
-  pass "no vendor Wi-Fi/WARP packages (integrated PPE path allowed)"
+  fail "H5000M Ethernet/HNAT IRQ resources are incomplete"
+fi
+HNAT_SOURCE="$SRC/target/linux/mediatek/files-6.12/drivers/net/ethernet/mediatek/mtk_hnat/hnat.c"
+HNAT_PACKAGE_MK="$SRC/package/kernel/linux/modules/netdevices.mk"
+if grep -q 'hnat_priv && hnat_priv->fe_base' "$HNAT_SOURCE" && \
+   grep -q 'ppe_started' "$HNAT_SOURCE" && \
+   grep -q 'AUTOLOAD:=$(call AutoLoad,90,mtkhnat)' "$HNAT_PACKAGE_MK"; then
+  pass "HNAT probe safety is applied and mtkhnat module autoload is ordered"
+else
+  fail "HNAT probe safety/autoload patch missing or not applied"
+fi
+if grep -q 'ext-devices-prefix' "$SRC/target/linux/mediatek/patches-6.12/999-zzz-5112-mtk-hnat-add-ext-devices-prefix-match-support.patch" && \
+   grep -q 'IS_RX_PPD(state->in)' "$SRC/target/linux/mediatek/patches-6.12/999-zzz-5111-mtk-hnat-support-non-whnat-ext-device-ingress-hook.patch" && \
+   cfg_has PACKAGE_hnat-detect; then
+  pass "upstream external-device prefix and Rx-PPD ingress implementation is available"
+else
+  fail "upstream USB/WWAN external ingress support or hnat-detect is missing"
+fi
+HNAT_DETECT_SRC="$SRC/package/mtk/applications/hnat-detect/files/usr/share/ucode/hnat/detect.uc"
+if grep -q 'return match(name, /^(usb|wwan|eth)/)' "$HNAT_DETECT_SRC" && \
+   grep -q 'enable.*RX_PPD_NAME' "$HNAT_DETECT_SRC"; then
+  pass "official hnat-detect recognizes WWAN external WAN and configures Rx-PPD"
+else
+  fail "official hnat-detect USB/WWAN Rx-PPD flow is incomplete"
+fi
+if grep -q 'CONFIG_PACKAGE_kmod-mt_wifi7=y' "$CFG" || grep -q 'CONFIG_PACKAGE_kmod-warp=y' "$CFG"; then
+  fail "forbidden closed-source Wi-Fi/WARP package enabled"
+else
+  pass "open-source mt76/WED Wi-Fi stack retained beside independent HNAT"
 fi
 if grep -q 'compatible = "mediatek,mt76"' "$DTS"; then
-	pass "H5000M DTS binds MT7992 to the in-tree mt76 driver"
+  pass "H5000M DTS binds MT7992 to the in-tree mt76 driver"
 else
-	fail "H5000M DTS no longer binds the in-tree mt76 driver"
+  fail "H5000M DTS no longer binds the in-tree mt76 driver"
 fi
 
 # ---------------------------------------------------------------------------
@@ -667,7 +698,7 @@ else
 fi
 if grep -q "flow_offloading='1'" "$OFFLOAD_DEFAULT" && grep -q "flow_offloading_hw='1'" "$OFFLOAD_DEFAULT" && \
    grep -q "fullcone='0'" "$OFFLOAD_DEFAULT" && grep -q "fullcone6='0'" "$OFFLOAD_DEFAULT"; then
-  pass "fw4 HW/SW flow-offload defaults enabled; full-cone defaults explicitly disabled"
+  pass "fw4 HW/SW flow-offload requests enabled; full-cone defaults explicitly disabled"
 else
   fail "fw4 offload/full-cone defaults incomplete"
 fi

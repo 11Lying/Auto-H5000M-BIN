@@ -1,0 +1,10 @@
+--- a/package/kernel/linux/modules/netdevices.mk
++++ b/package/kernel/linux/modules/netdevices.mk
+@@ -2370,6 +2370,7 @@
+ 	CONFIG_NET_MEDIATEK_HNAT
+   FILES:= \
+         $(LINUX_DIR)/drivers/net/ethernet/mediatek/mtk_hnat/mtkhnat.ko
++  AUTOLOAD:=$(call AutoLoad,90,mtkhnat)
+ endef
+ 
+ define KernelPackage/mediatek_hnat/description

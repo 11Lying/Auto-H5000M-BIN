@@ -1,8 +1,8 @@
-name: H5000M ImmortalWrt 25.12 integrated PPE build
+name: H5000M ImmortalWrt 25.12 HNAT USB build
 
 on:
   push:
-    branches: [main, hnat-6.12, audit-upgrade-2026-10]
+    branches: [main, hnat-6.12, audit-upgrade-2026-10, hnat-usb-experimental-20261017]
   workflow_dispatch:
     inputs:
       confirm_firmware_build:
@@ -27,7 +27,7 @@ permissions:
 concurrency:
   # Keep push validation and explicitly dispatched builds from cancelling
   # one another on the same ref.
-  group: h5000m-25.12-integrated-ppe-${{ github.run_id }}
+  group: h5000m-25.12-hnat-usb-${{ github.run_id }}
   cancel-in-progress: false
 
 env:
@@ -52,8 +52,11 @@ jobs:
         run: |
           set -euxo pipefail
           bash -n scripts/local-build.sh scripts/verify-config.sh
-          test "$(find patches -maxdepth 1 -type f | wc -l)" -eq 10
-          test -f patches/optional-independent-hnat/README.md
+          test "$(find patches -maxdepth 1 -type f | wc -l)" -eq 14
+          test -s patches/976-mtkhnat-probe-safe.patch
+          test -s patches/977-mtkhnat-autoload.patch
+          test -s patches/978-h5000m-hnat-usb-node.patch
+          test -s patches/999-eth-96-hnat-ppe-unwind-guard.patch
           if find . -path './.git' -prune -o -type f -print | grep -Eq 'h5000m-kit|mtwifi|Airpifanctrl|turboacc|padavanonly|openwrt-24\.10'; then
             echo 'forbidden legacy path found' >&2
             exit 1
@@ -67,7 +70,7 @@ jobs:
           test -s patches/968-linux-6.12.113.patch
           test -s patches/969-qmodem-sms-timestamp-utc8.patch
           test -s patches/974-mtk-eth-napi-helper-6.12.113.patch
-          test -s patches/975-mtkhnat91-integrated-ppe-6.12.113.patch
+          test -s patches/975-mtkhnat91-6.12.113-compat.patch
           grep -q 'ce35a9e4ef1b87fbbc2146036ce6693e4242861a' vendor/mt76/README.md
 
       - name: Upstream source/config preflight
@@ -84,7 +87,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: H5000M-25.12-integrated-PPE-validation-${{ github.sha }}
+          name: H5000M-25.12-HNAT-USB-validation-${{ github.sha }}
           path: |
             immortalwrt/.config
             immortalwrt/feeds.conf.default
@@ -183,7 +186,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: H5000M-25.12-integrated-PPE-build-log-${{ github.sha }}
+          name: H5000M-25.12-HNAT-USB-build-log-${{ github.sha }}
           path: |
             build.log
             diagnostic/libffi/**
@@ -202,7 +205,7 @@ jobs:
           test -s artifacts/sha256sums.txt
           grep -q 'source_commit=468e251661cb46face4ca0c961238282a6eaaa0a' artifacts/H5000M-IDENTITY.txt
           grep -q 'wifi_stack=official mt76' artifacts/H5000M-IDENTITY.txt
-          grep -q 'board_patches=968+969+970+971+972+973+974+975 applied; ethernet_debugfs_patches=94+95; integrated PPE/nft-offload; upstream thermal trips retained' artifacts/H5000M-IDENTITY.txt
+          grep -q 'board_patches=968+969+970+971+972+973+975+976+977+978 applied; ethernet_debugfs_patches=94+95+96; independent mtkhnat + NETSYS-v3 + nft-offload; upstream thermal trips retained' artifacts/H5000M-IDENTITY.txt
           grep -q '^kernel=6.12.113$' artifacts/H5000M-IDENTITY.txt
           grep -q 'modem_support=QModem Next + standalone WebUI/AT role mapping/QSCAN/QMI recovery; WeCom adapter installed' artifacts/H5000M-IDENTITY.txt
           grep -q 'private_config=user-supplied; no subscription, webhook key, password, or proxy secret embedded' artifacts/H5000M-IDENTITY.txt
@@ -219,8 +222,10 @@ jobs:
           grep -q '^CONFIG_PACKAGE_sms-forwarder-next=y$' artifacts/build.config
           ! grep -q '^CONFIG_PACKAGE_sendat=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_kmod-hwmon-pwmfan=y$' artifacts/build.config
-          ! grep -q '^CONFIG_PACKAGE_kmod-mediatek_hnat=y$' artifacts/build.config
-          ! grep -q '^CONFIG_PACKAGE_hnat-detect=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_kmod-mediatek_hnat=y$' artifacts/build.config
+          grep -q '^CONFIG_PACKAGE_hnat-detect=y$' artifacts/build.config
+          grep -q '^CONFIG_MEDIATEK_NETSYS_V3=y$' immortalwrt/target/linux/mediatek/filogic/config-6.12
+          grep -q 'CONFIG_NET_MEDIATEK_HNAT' immortalwrt/package/kernel/linux/modules/netdevices.mk
           grep -q '^CONFIG_PACKAGE_kmod-nf-conntrack=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_kmod-nf-nat=y$' artifacts/build.config
           grep -q '^CONFIG_PACKAGE_kmod-nft-offload=y$' artifacts/build.config
@@ -270,8 +275,10 @@ jobs:
           PY
           grep -q 'GIC_SPI 189 IRQ_TYPE_LEVEL_HIGH' immortalwrt/target/linux/mediatek/dts/mt7987.dtsi
           grep -q 'GIC_SPI 192 IRQ_TYPE_LEVEL_HIGH' immortalwrt/target/linux/mediatek/dts/mt7987.dtsi
-          ! grep -q 'mtketh-soc = <&eth>;' immortalwrt/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
-          ! grep -q 'compatible = "mediatek,mtk-hnat_v5"' immortalwrt/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
+          grep -q 'mtketh-soc = <&eth>;' immortalwrt/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
+          grep -q 'compatible = "mediatek,mtk-hnat_v5"' immortalwrt/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
+          grep -q 'ext-devices-prefix = "usb", "wwan", "rmnet"' immortalwrt/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
+          grep -q 'AUTOLOAD:=$(call AutoLoad,90,mtkhnat)' immortalwrt/package/kernel/linux/modules/netdevices.mk
           grep -q 'compatible = "mediatek,mt7987-wed"' immortalwrt/target/linux/mediatek/dts/mt7987.dtsi
           grep -q 'interrupts = <GIC_SPI 205 IRQ_TYPE_LEVEL_HIGH>;' immortalwrt/target/linux/mediatek/dts/mt7987.dtsi
           grep -q 'mediatek,wed = <&wed0>;' immortalwrt/target/linux/mediatek/dts/mt7987.dtsi
@@ -280,6 +287,8 @@ jobs:
           ! grep -qE '^CONFIG_PACKAGE_(luci-app-(nikki|mosdns|homeproxy|turboacc-mtk|Airpifanctrl)|modemmanager|h5000m-kit)=y$' artifacts/build.config
           grep -q 'hiveton_h5000m-initramfs-kernel.bin' <(find artifacts -maxdepth 1 -type f -printf '%f\n')
           grep -q 'hiveton_h5000m-squashfs-sysupgrade.bin' <(find artifacts -maxdepth 1 -type f -printf '%f\n')
+          grep -q '^kmod-mediatek_hnat - ' artifacts/openwrt-image.manifest
+          grep -q '^hnat-detect - ' artifacts/openwrt-image.manifest
           grep -q '^kmod-nf-conntrack - ' artifacts/openwrt-image.manifest
           grep -q '^kmod-nf-nat - ' artifacts/openwrt-image.manifest
           grep -q '^kmod-nft-offload - ' artifacts/openwrt-image.manifest
@@ -306,7 +315,7 @@ jobs:
         if: inputs.confirm_firmware_build == true
         uses: actions/upload-artifact@v4
         with:
-          name: H5000M-ImmortalWrt-25.12-integrated-PPE-${{ github.sha }}
+          name: H5000M-ImmortalWrt-25.12-HNAT-USB-${{ github.sha }}
           path: artifacts/
           if-no-files-found: error
           retention-days: 30

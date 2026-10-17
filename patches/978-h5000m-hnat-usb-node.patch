@@ -1,0 +1,35 @@
+From: H5000M HNAT build
+Subject: [PATCH] arm64: dts: add MT7987 HNAT v5 and USB/WWAN external interfaces
+
+The shared MT7987 PDMA/FE IRQ correction is applied separately by
+973-h5000m-ethernet-rss-irqs.patch. This patch adds only the HNAT platform
+node, avoiding duplicate IRQ hunks.
+
+--- a/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
++++ b/target/linux/mediatek/dts/mt7987a-hiveton-h5000m.dts
+@@ -251,3 +251,25 @@
+ 	pinctrl-0 = <&uart0_pins>;
+ 	status = "okay";
+ };
++
++&soc {
++	hnat: hnat@15100000 {
++		compatible = "mediatek,mtk-hnat_v5";
++		reg = <0 0x15100000 0 0x80000>;
++		interrupts = <GIC_SPI 198 IRQ_TYPE_LEVEL_HIGH>;
++		resets = <&ethsys 0>;
++		reset-names = "mtketh";
++		/* Required by the HNAT probe to obtain mtk_eth's drvdata. */
++		mtketh-soc = <&eth>;
++		mtketh-wan = "eth1";
++		mtketh-lan = "eth0";
++		/* hnat-detect replaces these runtime names when the topology is up. */
++		mtketh-lan2 = "hnat";
++		mtketh-ppd = "hnat";
++		mtketh-max-gmac = <2>;
++		mtketh-ppe-num = <2>;
++		ext-devices-prefix = "usb", "wwan", "rmnet", "eth2", "eth3";
++		ext-devices = "wwan0", "usb0";
++		status = "okay";
++	};
++};

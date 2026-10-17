@@ -1,12 +1,10 @@
 #!/bin/sh
-# Enable fw4 flow offloading for the H5000M's in-tree MediaTek PPE path.
-# This enables both software and hardware offload; it does not install vendor HNAT.
+# Enable fw4 nft flow-offload requests for the H5000M MediaTek HNAT path.
+# The mtkhnat module owns PPE; hnat-detect maps USB/WWAN external flows/PPD.
 uci -q get firewall.@defaults[0] >/dev/null || exit 0
 uci set firewall.@defaults[0].flow_offloading='1'
 uci set firewall.@defaults[0].flow_offloading_hw='1'
-# Full-cone is a real optional package in this pinned tree, but its UDP
-# expression has not been proven compatible with the MT7987 HNAT/PPE path.
-# Keep it available in the image but disabled by default.
+# Full-cone remains disabled until separately tested against MT7987 HNAT.
 uci set firewall.@defaults[0].fullcone='0'
 uci set firewall.@defaults[0].fullcone6='0'
 uci commit firewall
