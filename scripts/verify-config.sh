@@ -16,7 +16,7 @@ CFG="$SRC/.config"
 
 FAIL=0
 pass() { printf '  \033[32mPASS\033[0m  %s\n' "$*"; }
-fail() { printf '  \033[31mFAIL\033[0m  %s\n' "$*"; FAIL=$((FAIL + 1)); }
+fail() { printf '  \033[31mFAIL\033[0m  %s\n' "$*"; printf '::error::verify-config: %s\n' "$*" >&2; FAIL=$((FAIL + 1)); }
 sect() { printf '\n=== %s ===\n' "$*"; }
 
 # cfg_has <symbol>          - exact "SYMBOL=y" (or =m) in the expanded .config
