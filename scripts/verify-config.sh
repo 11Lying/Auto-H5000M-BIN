@@ -37,8 +37,73 @@ fi
 # hnat-6.12 uses chasey-dev 25.12, not the main branch.
 # The pinned commit check above is sufficient.
 pass "hnat-6.12 branch: using chasey-dev pinned commit"
-kv="$(sed -n 's/^LINUX_VERSION-6\.12 = //p' "$SRC/target/linux/generic/kernel-6.12" 2>/dev/null || true)"
-if [ -n "$kv" ]; then pass "kernel version $kv"; else fail "kernel version not found"; fi
+sect "1b. stable kernel and QModem source patches"
+if grep -qx 'LINUX_VERSION-6.12 = .113' "$SRC/target/linux/generic/kernel-6.12" && \
+   grep -qx 'LINUX_KERNEL_HASH-6.12.113 = e09b6727e5c521253f0d41694900b9c38fb7604db7d35238a8197aa9f7de2428' "$SRC/target/linux/generic/kernel-6.12"; then
+  pass "kernel.org stable v6.12.113 and SHA256 are pinned"
+else
+  fail "kernel source pin is not the reviewed 6.12.113 stable tarball"
+fi
+kernel_tmp="$(mktemp -d)"
+mkdir -p "$kernel_tmp/target/linux/generic"
+if git -C "$SRC" show HEAD:target/linux/generic/kernel-6.12 > "$kernel_tmp/target/linux/generic/kernel-6.12" && \
+   patch -d "$kernel_tmp" -p1 --forward --silent < "$ROOT_DIR/patches/968-linux-6.12.113.patch" >/dev/null 2>&1 && \
+   cmp -s "$kernel_tmp/target/linux/generic/kernel-6.12" "$SRC/target/linux/generic/kernel-6.12"; then
+  pass "kernel-6.12 version file equals pinned source plus exactly patch 968"
+else
+  fail "kernel-6.12 version file differs from pinned source plus patch 968"
+fi
+rm -rf "$kernel_tmp"
+qmi_patch="$SRC/target/linux/generic/backport-6.12/788-v7.3-net-usb-qmi_wwan-add-Quectel-EG120K-EA.patch"
+qmi_saved="$SRC/target/linux/generic/backport-6.12-superseded/788-v7.3-net-usb-qmi_wwan-add-Quectel-EG120K-EA.patch"
+if [ ! -e "$qmi_patch" ] && [ -s "$qmi_saved" ] && \
+   grep -Fq 'QMI_MATCH_FF_FF_FF(0x2c7c, 0x030b)' "$qmi_saved"; then
+  pass "redundant QMI USB-ID backport is preserved but out of the 6.12.113 patch queue"
+else
+  fail "6.12.113 duplicate QMI backport was not safely preserved/disabled"
+fi
+eth07="$SRC/target/linux/mediatek/patches-6.12/999-eth-07-mtk_eth_soc-fix-panic-issue-with-napi_enable.patch"
+eth07_saved="$SRC/target/linux/mediatek/patches-6.12-superseded/999-eth-07-mtk_eth_soc-fix-panic-issue-with-napi_enable.patch"
+if [ -s "$eth07" ] && cmp -s "$eth07" "$ROOT_DIR/patches/974-mtk-eth-napi-helper-6.12.113.patch" && \
+   [ -s "$eth07_saved" ] && \
+   grep -Fq 'netif_napi_add(eth->dummy_dev, &eth->rx_napi, mtk_napi_rx)' "$eth07_saved"; then
+  pass "6.12.113 NAPI helper rebase staged; original vendor patch preserved outside queue"
+else
+  fail "stable-kernel NAPI rebase/original-patch preservation is incomplete"
+fi
+sms_source="$SRC/feeds/qmodem/application/sms_forwarder_next/files/sms_forwarder_next"
+if [ -f "$sms_source" ] && grep -Fq 'const SMS_TZ_FIX = 28800;' "$sms_source" && \
+   grep -Fq 'let ts = int(timestamp) - SMS_TZ_FIX;' "$sms_source"; then
+  pass "QModem SMS timestamp correction is present in source"
+else
+  fail "QModem SMS timestamp correction is missing"
+fi
+sms_tmp="$(mktemp -d)"
+mkdir -p "$sms_tmp/feeds/qmodem/application/sms_forwarder_next/files"
+if git -C "$SRC/feeds/qmodem" show HEAD:application/sms_forwarder_next/files/sms_forwarder_next > \
+     "$sms_tmp/feeds/qmodem/application/sms_forwarder_next/files/sms_forwarder_next" && \
+   patch -d "$sms_tmp" -p1 --forward --silent < "$ROOT_DIR/patches/969-qmodem-sms-timestamp-utc8.patch" >/dev/null 2>&1 && \
+   cmp -s "$sms_tmp/feeds/qmodem/application/sms_forwarder_next/files/sms_forwarder_next" "$sms_source"; then
+  pass "QModem SMS source equals pinned feed plus exactly patch 969"
+else
+  fail "QModem SMS source differs from the pinned feed plus patch 969"
+fi
+rm -rf "$sms_tmp"
+hnat91="$SRC/target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch"
+hnat91_saved="$SRC/target/linux/mediatek/patches-6.12-superseded/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch"
+hnat91_tmp="$(mktemp -d)"
+mkdir -p "$hnat91_tmp/target/linux/mediatek/patches-6.12"
+if git -C "$SRC" show HEAD:target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch > \
+     "$hnat91_tmp/target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch" && \
+   [ -s "$hnat91_saved" ] && \
+   cmp -s "$hnat91_tmp/target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch" "$hnat91_saved" && \
+   patch -d "$hnat91_tmp" -p1 --forward --silent < "$ROOT_DIR/patches/975-mtkhnat91-integrated-ppe-6.12.113.patch" >/dev/null 2>&1 && \
+   cmp -s "$hnat91_tmp/target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch" "$hnat91"; then
+  pass "999-eth-91 original preserved; only the stable-incompatible, unselected HNAT unwind hunk is omitted"
+else
+  fail "999-eth-91 stable compatibility edit differs from its pinned original"
+fi
+rm -rf "$hnat91_tmp"
 
 # ---------------------------------------------------------------------------
 sect "2. feeds"
@@ -193,7 +258,7 @@ unwanted_packages=(
 	PACKAGE_luci-app-dockerman PACKAGE_luci-app-ramfree PACKAGE_luci-app-turboacc-mtk
 	PACKAGE_luci-app-Airpifanctrl PACKAGE_luci-app-fancontrol PACKAGE_luci-app-eqos-mtk
 	PACKAGE_luci-app-mtwifi-cfg PACKAGE_luci-app-openclash-dev PACKAGE_luci-app-mwan3
-	PACKAGE_luci-app-qmodem PACKAGE_luci-app-modem PACKAGE_modemmanager
+	PACKAGE_luci-app-qmodem PACKAGE_luci-app-modem PACKAGE_modemmanager PACKAGE_sendat
 	PACKAGE_h5000m-kit PACKAGE_kmod-pcie_mhi PACKAGE_kmod-mtk-t7xx
 )
 unwanted_found=0
@@ -225,11 +290,37 @@ if [ -d "$SRC/package/mtk" ]; then
 else
 	pass "no MTK vendor feed present"
 fi
-extra="$(find "$ROOT_DIR/patches" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' 2>/dev/null | grep -vE '^(970|971|972|973)-' || true)"
+extra="$(find "$ROOT_DIR/patches" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' 2>/dev/null | grep -vE '^(968-linux-6[.]12[.]113|969-qmodem-sms-timestamp-utc8|970-pwm-fan-boot-duty|971-hwmon-pwmfan-boot-autoload|972-h5000m-fan-boot-duty|973-h5000m-ethernet-rss-irqs|974-mtk-eth-napi-helper-6[.]12[.]113|975-mtkhnat91-integrated-ppe-6[.]12[.]113|999-eth-94-mtk_eth-debugfs-mib-safe|999-eth-95-mtk_eth-debugfs-lifecycle)\.patch$' || true)"
 if [ -z "$extra" ] && [ -f "$ROOT_DIR/patches/optional-independent-hnat/README.md" ]; then
-	pass "active patches are only 970..973; independent HNAT patches are retained but disabled"
+	pass "active patch allowlist is exact; independent HNAT patches are retained but disabled"
 else
 	fail "unexpected active patch files or missing disabled-HNAT note: $(echo "$extra" | tr '\n' ' ')"
+fi
+# These patches run after vendor 90/91/93. 90 added a loop over all GMAC IDs
+# without skipping disabled DT MACs, and created debugfs/proc files before probe
+# completed without removing them on device removal.
+ETH_SAFE_PATCH="$SRC/target/linux/mediatek/patches-6.12/999-eth-94-mtk_eth-debugfs-mib-safe.patch"
+ETH_LIFECYCLE_PATCH="$SRC/target/linux/mediatek/patches-6.12/999-eth-95-mtk_eth-debugfs-lifecycle.patch"
+if [ -s "$ETH_SAFE_PATCH" ] && grep -Fq 'mac = READ_ONCE(eth->mac[i]);' "$ETH_SAFE_PATCH" && \
+   grep -Fq 'if (!mac || mac->id != i)' "$ETH_SAFE_PATCH" && \
+   grep -Fq 'sgmii_to_mac[id] >= ARRAY_SIZE(eth->mac)' "$ETH_SAFE_PATCH" && \
+   grep -Fq 'usxgmii_to_mac[id] >= ARRAY_SIZE(eth->mac)' "$ETH_SAFE_PATCH" && \
+   grep -Fq 'RX_BC_DROP_CNT, rx_bc_drop' "$ETH_SAFE_PATCH" && \
+   grep -Fq 'RX_MC_DROP_CNT, rx_mc_drop' "$ETH_SAFE_PATCH" && \
+   grep -Fq 'proc_remove(eth->debugfs->procfs_root);' "$ETH_SAFE_PATCH"; then
+	pass "MAC/XFI MIB readers guard sparse GMAC/PCS entries and preserve counter identity"
+else
+	fail "MAC MIB null/lifecycle/counter-identity patch is missing or incomplete"
+fi
+if [ -s "$ETH_LIFECYCLE_PATCH" ] && \
+   grep -Fq 'err = mtk_eth_debugfs_init(eth);' "$ETH_LIFECYCLE_PATCH" && \
+   grep -Fq 'if (err && !eth->debugfs)' "$ETH_LIFECYCLE_PATCH" && \
+   grep -Fq 'err_unreg_netdev:' "$ETH_LIFECYCLE_PATCH" && \
+   grep -Fq 'mtk_eth_debugfs_exit(eth);' "$ETH_LIFECYCLE_PATCH" && \
+   [ "$(grep -n -F 'err = mtk_eth_debugfs_init(eth);' "$ETH_LIFECYCLE_PATCH" | cut -d: -f1)" -lt "$(grep -n -F 'err = register_netdev(eth->netdev[i]);' "$ETH_LIFECYCLE_PATCH" | cut -d: -f1)" ]; then
+	pass "debugfs backing state exists before netdev exposure; failures/removal drain callbacks"
+else
+	fail "Ethernet debugfs/proc lifecycle ordering or cleanup patch is missing/incomplete"
 fi
 # mt76 must be staged: the 25.12 base omits upstream's package/kernel/mt76
 # while the H5000M device profile still declares kmod-mt7996e and
@@ -239,6 +330,14 @@ if [ -f "$SRC/package/kernel/mt76/Makefile" ]; then
 	pass "mt76 package staged from vendor/mt76 (official openwrt-25.12 recipe)"
 else
 	fail "mt76 package missing: $SRC/package/kernel/mt76/Makefile"
+fi
+MT76_RRO_FIX="$SRC/package/kernel/mt76/patches/0118-wifi-mt76-mt7996-fix-wed-rro-ba-delete-event-layout.patch"
+if [ -s "$MT76_RRO_FIX" ] && grep -Fq '__le16 wlan_id;' "$MT76_RRO_FIX" && \
+   grep -Fq 'u8 tid;' "$MT76_RRO_FIX" && \
+   grep -Fq 'bd49f06353d7e8cdfa1458912ba9a866870cb795' "$ROOT_DIR/vendor/mt76/README.md"; then
+	pass "pinned mt76 source receives the verified 12-byte MT7996 WED-RRO event fix"
+else
+	fail "targeted MT7996 WED-RRO event layout backport is missing"
 fi
 WED_KCFG="$SRC/target/linux/mediatek/filogic/config-6.12"
 if grep -q 'compatible = "mediatek,mt7987-wed"' "$SRC/target/linux/mediatek/dts/mt7987.dtsi" && \
@@ -294,8 +393,10 @@ fi
 if cfg_has PACKAGE_luci-app-qmodem && cfg_has PACKAGE_luci-app-qmodem-next; then
 	fail "both QModem UIs are enabled"
 else
-	pass "only one QModem UI (legacy Lua UI not selected)"
+	pass "only QModem Next UI is selected; standalone ModemWebUI is separate"
 fi
+cfg_has PACKAGE_h5000m-modem-support && pass "H5000M standalone ModemWebUI/AT/QSCAN support package selected" || fail "h5000m-modem-support package missing"
+cfg_absent PACKAGE_sendat && pass "vendor sendat package disabled; custom wrapper owns /bin/sendat" || fail "sendat package conflicts with the AT wrapper"
 if cfg_has PACKAGE_luci-app-mwan3; then
 	fail "luci-app-mwan3 pulled in"
 else
@@ -326,6 +427,11 @@ for sym in PACKAGE_kmod-mt7996e PACKAGE_kmod-mt76-core PACKAGE_kmod-mt7992-23-fi
 done
 # the DTS binds this device to the in-tree mt76 driver
 KCFG="$SRC/target/linux/mediatek/filogic/config-6.12"
+if grep -qx 'CONFIG_NET_MEDIATEK_HNAT=y' "$KCFG" || grep -qx 'CONFIG_NET_MEDIATEK_HNAT=m' "$KCFG"; then
+  fail "independent NET_MEDIATEK_HNAT symbol enabled alongside the integrated PPE path"
+else
+  pass "independent NET_MEDIATEK_HNAT kernel symbol remains disabled"
+fi
 for sym in CONFIG_NET_MEDIATEK_SOC CONFIG_NET_MEDIATEK_SOC_WED; do
   if grep -qx "$sym=y" "$KCFG"; then pass "kernel: $sym"; else fail "kernel config missing $sym"; fi
 done
@@ -381,8 +487,7 @@ for sym in \
 	PACKAGE_kmod-usb-serial-option PACKAGE_kmod-usb-serial-qualcomm \
 	PACKAGE_uqmi PACKAGE_libqmi PACKAGE_qmodem PACKAGE_ubus-at-daemon PACKAGE_tom_modem \
 	PACKAGE_modem_scan PACKAGE_sms-tool_q PACKAGE_sms-forwarder-next \
-	PACKAGE_quectel-CM-5G-M \
-	; do
+	PACKAGE_quectel-CM-5G-M PACKAGE_h5000m-modem-support; do
 	cfg_has "$sym" && pass "modem: $sym" || fail "modem dependency missing: $sym"
 done
 
@@ -424,6 +529,8 @@ cfg_has PACKAGE_kmod-hwmon-pwmfan \
 
 # ---------------------------------------------------------------------------
 sect "12b. performance optimizations"
+cfg_has PACKAGE_smartdns && pass "SmartDNS engine selected" || fail "smartdns missing"
+cfg_has PACKAGE_luci-app-smartdns && pass "SmartDNS LuCI app selected" || fail "luci-app-smartdns missing"
 cfg_has PACKAGE_kmod-tcp-bbr && pass "BBR module selected" || fail "kmod-tcp-bbr missing"
 # BBR default is applied at first boot via uci-defaults (91-h5000m-bbr),
 # not via kernel config (top-level Kconfig drops raw kernel symbols).
@@ -470,16 +577,94 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-sect "14. no custom network / DNS / firewall payload"
-if [ -d "$ROOT_DIR/package/h5000m-fancontrol" ] && [ "$(find "$ROOT_DIR/package" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ]; then
-  pass "only reviewed H5000M fancontrol package is shipped"
+sect "14. custom package scope and secret hygiene"
+if [ "$(find "$ROOT_DIR/package" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 3 ] && \
+   [ -d "$ROOT_DIR/package/h5000m-fancontrol" ] && \
+   [ -d "$ROOT_DIR/package/h5000m-modem-support" ] && \
+   [ -d "$ROOT_DIR/package/h5000m-network-guard" ]; then
+  pass "exactly the reviewed fan, modem-support and IPv6-guard packages are shipped"
 else
-  fail "unexpected custom package/rootfs content"
+  fail "custom package allowlist differs from the reviewed three packages"
 fi
+cfg_has PACKAGE_h5000m-modem-support && cfg_has PACKAGE_h5000m-network-guard \
+  && pass "custom modem and IPv6 guard packages selected" \
+  || fail "custom modem/IPv6 guard package missing from expanded config"
+cfg_has PACKAGE_uclient-fetch && pass "IPv6 prefix updater fetch dependency selected" || fail "uclient-fetch dependency missing"
 for f in "$ROOT_DIR/package/h5000m-fancontrol/files/etc/config/fancontrol" "$ROOT_DIR/package/h5000m-fancontrol/files/etc/init.d/fancontrol" "$ROOT_DIR/package/h5000m-fancontrol/files/usr/bin/h5000m-audit"; do
   [ -s "$f" ] || fail "missing H5000M runtime file: $f"
 done
+for f in "$ROOT_DIR/package/h5000m-modem-support/files/usr/bin/webuiserver" \
+         "$ROOT_DIR/package/h5000m-modem-support/files/bin/sendat" \
+         "$ROOT_DIR/package/h5000m-modem-support/files/bin/sendat.real" \
+         "$ROOT_DIR/package/h5000m-modem-support/files/usr/libexec/qscan/qscan-run.sh" \
+         "$ROOT_DIR/package/h5000m-modem-support/files/usr/share/sms_forwarder/sms_forward_wecom.sh" \
+         "$ROOT_DIR/package/h5000m-modem-support/src/atsend.c" \
+         "$ROOT_DIR/package/h5000m-modem-support/src/qscan-worker.c" \
+         "$ROOT_DIR/package/h5000m-modem-support/LICENSE.webui.GPL-3.0" \
+         "$ROOT_DIR/package/h5000m-modem-support/LICENSE.qscan.MIT"; do
+  [ -s "$f" ] || fail "missing modem-support payload/source/license: $f"
+done
+for f in "$ROOT_DIR/package/h5000m-modem-support/files/etc/init.d"/* \
+         "$ROOT_DIR/package/h5000m-modem-support/files/etc/uci-defaults"/* \
+         "$ROOT_DIR/package/h5000m-modem-support/files/etc/hotplug.d/usb"/* \
+         "$ROOT_DIR/package/h5000m-modem-support/files/usr/bin"/*.sh \
+         "$ROOT_DIR/package/h5000m-modem-support/files/usr/libexec/qscan"/*.sh \
+         "$ROOT_DIR/package/h5000m-modem-support/files/usr/share/sms_forwarder"/*.sh \
+         "$ROOT_DIR/package/h5000m-network-guard/files/etc/uci-defaults"/* \
+         "$ROOT_DIR/package/h5000m-network-guard/files/etc/hotplug.d/iface"/* \
+         "$ROOT_DIR/package/h5000m-network-guard/files/usr/bin"/*.sh; do
+  [ -f "$f" ] || continue
+  sh -n "$f" || fail "shell syntax error: $f"
+done
+if command -v gcc >/dev/null 2>&1 && \
+   gcc -D_GNU_SOURCE -std=gnu11 -Wall -Wextra -Werror -fsyntax-only \
+     "$ROOT_DIR/package/h5000m-modem-support/src/atsend.c" \
+     "$ROOT_DIR/package/h5000m-modem-support/src/qscan-worker.c"; then
+  pass "QSCAN C source passes native warning-as-error syntax checks"
+else
+  fail "QSCAN C source syntax check failed or native gcc unavailable"
+fi
+if file "$ROOT_DIR/package/h5000m-modem-support/files/usr/bin/webuiserver" | grep -q 'ARM aarch64' && \
+   file "$ROOT_DIR/package/h5000m-modem-support/files/bin/sendat.real" | grep -q 'ARM aarch64'; then
+  pass "prebuilt vendor helpers match the H5000M aarch64 userspace architecture"
+else
+  fail "vendor helper architecture is not aarch64"
+fi
+for f in "$ROOT_DIR/package/h5000m-network-guard/files/usr/bin/ipv6-guard.sh" \
+         "$ROOT_DIR/package/h5000m-network-guard/files/usr/bin/ipv6-cn-fastfail.sh" \
+         "$ROOT_DIR/package/h5000m-network-guard/files/etc/ipv6-cn.list"; do
+  [ -s "$f" ] || fail "missing IPv6 guard payload: $f"
+done
+for f in "$ROOT_DIR/package/h5000m-modem-support/files/etc/uci-defaults/90-h5000m-modem-support" \
+         "$ROOT_DIR/package/h5000m-network-guard/files/etc/uci-defaults/92-h5000m-network-guard"; do
+  [ -x "$f" ] || fail "uci-defaults must be executable: $f"
+done
+if grep -Eq 'uci[[:space:]].*(network\.|dnsmasq\.|openclash\.|smartdns\.)' \
+   "$ROOT_DIR/package/h5000m-modem-support/files/etc/uci-defaults/90-h5000m-modem-support" \
+   "$ROOT_DIR/package/h5000m-network-guard/files/etc/uci-defaults/92-h5000m-network-guard"; then
+  fail "first-boot custom package writes WAN/DNS/OpenClash settings"
+else
+  pass "first-boot additions leave WAN/DNS/OpenClash user configuration untouched"
+fi
+if find "$ROOT_DIR/package" -type f \
+   \( -path '*/etc/config/openclash' -o -path '*/etc/config/sms_forwarder' -o -path '*/etc/config/network' \) \
+   -print -quit | grep -q .; then
+  fail "user-specific OpenClash/SMS/WAN UCI config must not be embedded"
+else
+  pass "no user-specific OpenClash, SMS or network UCI config embedded"
+fi
+if grep -RqiE 'qyapi\.weixin\.qq\.com/cgi-bin/webhook/send\?key=[[:xdigit:]-]{16,}|(subscribe|token)=([A-Za-z0-9_-]{24,})' \
+   "$ROOT_DIR/package"; then
+  fail "possible credential or subscription URL embedded in public package"
+else
+  pass "no obvious webhook keys/subscription tokens in custom packages"
+fi
 OFFLOAD_DEFAULT="$ROOT_DIR/package/h5000m-fancontrol/files/etc/uci-defaults/90-h5000m-hw-offload"
+if ! grep -Fq '[ "$WIFITEMP" = "1" ] || return 1' "$ROOT_DIR/package/h5000m-fancontrol/files/usr/bin/fancontrol"; then
+  fail "fancontrol wifi_temp=0 does not short-circuit mt76 hwmon temperature"
+else
+  pass "fancontrol wifi_temp=0 disables both hwmon and iwpriv temperature inputs"
+fi
 if grep -q "flow_offloading='1'" "$OFFLOAD_DEFAULT" && grep -q "flow_offloading_hw='1'" "$OFFLOAD_DEFAULT" && \
    grep -q "fullcone='0'" "$OFFLOAD_DEFAULT" && grep -q "fullcone6='0'" "$OFFLOAD_DEFAULT"; then
   pass "fw4 HW/SW flow-offload defaults enabled; full-cone defaults explicitly disabled"

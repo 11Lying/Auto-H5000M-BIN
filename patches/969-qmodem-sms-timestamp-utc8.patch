@@ -1,0 +1,35 @@
+--- a/feeds/qmodem/application/sms_forwarder_next/files/sms_forwarder_next
++++ b/feeds/qmodem/application/sms_forwarder_next/files/sms_forwarder_next
+@@ -210,23 +210,29 @@
+ 	// Replace single quotes with '\''
+ 	let escaped = replace(sprintf('%s', str), "'", "'\\''");
+ 	return sprintf("'%s'", escaped);
+ }
+ 
++// The RM502Q firmware reports local wall-clock time as a UTC epoch (+8h).
++// Keep this correction here, matching the QModem LuCI UTC+8 display option.
++// Set to 0 if a future modem firmware fixes its SMS timestamp.
++const SMS_TZ_FIX = 28800;
++
+ // Format timestamp
+ function formatTimestamp(timestamp) {
+ 	if (!timestamp)
+ 		return 'Unknown';
+ 	
+-	let cmd = `date -d @${timestamp} '+%Y-%m-%d %H:%M:%S'`;
++	let ts = int(timestamp) - SMS_TZ_FIX;
++	let cmd = `date -d @${ts} '+%Y-%m-%d %H:%M:%S'`;
+ 	let proc = popen(cmd, 'r');
+ 	if (!proc)
+-		return sprintf('%d', timestamp);
++		return sprintf('%d', ts);
+ 	
+ 	let output = rtrim(proc.read('all') || '');
+ 	proc.close();
+-	return output || sprintf('%d', timestamp);
++	return output || sprintf('%d', ts);
+ }
+ 
+ // Execute forward script
+ function executeForward(msg, api_configs) {
+ 	let total_success = 0, total_count = 0;

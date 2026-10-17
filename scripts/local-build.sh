@@ -183,6 +183,10 @@ clone_source() {
 		head="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
 		[ "$head" = "$REPO_COMMIT" ] || die "expected commit $REPO_COMMIT, got $head"
 	fi
+	git -C "$SOURCE_DIR" cat-file -e "$REPO_COMMIT^{commit}" 2>/dev/null \
+		|| die "source checkout is incomplete: pinned commit object is unavailable"
+	git -C "$SOURCE_DIR" cat-file -e "$REPO_COMMIT^{tree}" 2>/dev/null \
+		|| die "source checkout is incomplete: pinned tree object is unavailable"
 
 	# Persistent compiler cache. Local builds use the source tree by default;
 	# CI may point CCACHE_DIR at its cache mount. Never clean this directory.
@@ -252,7 +256,98 @@ run_feeds() {
 # 3. patches
 # ---------------------------------------------------------------------------
 apply_patches() {
-	local p dir
+	local p dir kernel_pin
+	# Advance only the stable 6.12.y tarball, not the chasey-dev base or feeds.
+	# 6.12.113 is the kernel.org stable release: it fixes conntrack/flowtable
+	# offload-bit handling, the mt7996 WED-RRO event layout, and an mtk_eth_soc
+	# probe ordering issue. Keep the upstream tarball hash pinned.
+	kernel_pin="$SOURCE_DIR/target/linux/generic/kernel-6.12"
+	if grep -qx 'LINUX_VERSION-6.12 = .113' "$kernel_pin" && \
+	   grep -qx 'LINUX_KERNEL_HASH-6.12.113 = e09b6727e5c521253f0d41694900b9c38fb7604db7d35238a8197aa9f7de2428' "$kernel_pin"; then
+		log "Linux 6.12.113 stable pin already applied"
+	elif grep -qx 'LINUX_VERSION-6.12 = .112' "$kernel_pin" && \
+	     grep -qx 'LINUX_KERNEL_HASH-6.12.112 = 164dc9d1f6c93c61a15e1f071c48379b467f2b17c469cce7223471968208ed03' "$kernel_pin"; then
+		patch -d "$SOURCE_DIR" -p1 --forward --silent < "$ROOT_DIR/patches/968-linux-6.12.113.patch" \
+			|| die "could not apply the reviewed Linux 6.12.113 stable pin"
+		log "pinned official Linux 6.12.113 tarball and SHA256"
+	else
+		die "unexpected target/linux/generic/kernel-6.12 contents; refusing an unreviewed kernel pin"
+	fi
+
+	# The 6.12.113 tarball already contains the Quectel EG120K-EA USB ID added
+	# by this 25.12 backport. Preserve that original patch but move it out of
+	# the active queue to prevent a duplicate-hunk failure on the newer kernel.
+	local qmi_patch="$SOURCE_DIR/target/linux/generic/backport-6.12/788-v7.3-net-usb-qmi_wwan-add-Quectel-EG120K-EA.patch"
+	local qmi_saved="$SOURCE_DIR/target/linux/generic/backport-6.12-superseded/788-v7.3-net-usb-qmi_wwan-add-Quectel-EG120K-EA.patch"
+	if [ -f "$qmi_patch" ]; then
+		grep -Fq 'QMI_MATCH_FF_FF_FF(0x2c7c, 0x030b)' "$qmi_patch" \
+			|| die "unexpected QMI EG120K backport content; refusing to supersede"
+		[ ! -e "$qmi_saved" ] || die "preserved duplicate-QMI patch already exists beside active patch"
+		mkdir -p "$(dirname "$qmi_saved")"
+		mv "$qmi_patch" "$qmi_saved" || die "could not preserve superseded QMI patch"
+		log "preserved QMI EG120K backport outside patch queue; 6.12.113 includes the same ID"
+	elif [ -f "$qmi_saved" ]; then
+		log "QMI EG120K backport already preserved outside the 6.12.113 patch queue"
+	else
+		die "expected QMI EG120K backport not found; cannot verify 6.12.113 patch queue"
+	fi
+
+	# Stable 6.12.113 upstreamed the dummy-netdev/NAPI move from vendor
+	# 999-eth-07, but RSS patch 999-eth-09 still requires mtk_napi_del().
+	# Preserve the original patch and stage the minimal stable-kernel rebase.
+	local eth07="$SOURCE_DIR/target/linux/mediatek/patches-6.12/999-eth-07-mtk_eth_soc-fix-panic-issue-with-napi_enable.patch"
+	local eth07_saved="$SOURCE_DIR/target/linux/mediatek/patches-6.12-superseded/999-eth-07-mtk_eth_soc-fix-panic-issue-with-napi_enable.patch"
+	if [ -f "$eth07" ] && cmp -s "$eth07" "$ROOT_DIR/patches/974-mtk-eth-napi-helper-6.12.113.patch"; then
+		[ -s "$eth07_saved" ] || die "rebased 999-eth-07 exists without preserved original"
+		log "stable 999-eth-07 helper patch already staged"
+	elif [ -f "$eth07" ]; then
+		grep -Fq 'netif_napi_add(eth->dummy_dev, &eth->rx_napi, mtk_napi_rx)' "$eth07" \
+			|| die "unexpected 999-eth-07 contents; refusing to rebase"
+		[ ! -e "$eth07_saved" ] || die "preserved 999-eth-07 patch already exists"
+		mkdir -p "$(dirname "$eth07_saved")"
+		mv "$eth07" "$eth07_saved" || die "could not preserve original 999-eth-07 patch"
+		stage_file_safely "$ROOT_DIR/patches/974-mtk-eth-napi-helper-6.12.113.patch" "$eth07"
+		log "preserved original 999-eth-07; staged stable 6.12.113 NAPI helper rebase"
+	elif [ -s "$eth07_saved" ]; then
+		stage_file_safely "$ROOT_DIR/patches/974-mtk-eth-napi-helper-6.12.113.patch" "$eth07"
+		log "restaged 974 NAPI helper from preserved 999-eth-07 source"
+	else
+		die "expected vendor 999-eth-07 patch not found"
+	fi
+
+	# Keep the original independent-HNAT integration patch, but drop its final
+	# HNAT-only unwind guard: it targets the old 6.12.112 probe layout and the
+	# HNAT module is forbidden in this integrated-PPE image.
+	local hnat91="$SOURCE_DIR/target/linux/mediatek/patches-6.12/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch"
+	local hnat91_saved="$SOURCE_DIR/target/linux/mediatek/patches-6.12-superseded/999-eth-91-mtk_eth_soc-add-mtkhnat-driver-support.patch"
+	if [ -f "$hnat91" ] && ! grep -Fq '@@ -7671,7 +7730,9 @@ err_unreg_netdev:' "$hnat91"; then
+		[ -s "$hnat91_saved" ] || die "patched 999-eth-91 lacks preserved original"
+		log "999-eth-91 compatibility edit already staged"
+	elif [ -f "$hnat91" ]; then
+		grep -Fq '@@ -7671,7 +7730,9 @@ err_unreg_netdev:' "$hnat91" \
+			|| die "unexpected 999-eth-91 final hunk; refusing stable-kernel edit"
+		[ ! -e "$hnat91_saved" ] || die "original 999-eth-91 patch backup already exists"
+		mkdir -p "$(dirname "$hnat91_saved")"
+		cp -p "$hnat91" "$hnat91_saved" || die "could not preserve original 999-eth-91 patch"
+		patch -d "$SOURCE_DIR" -p1 --forward --silent < "$ROOT_DIR/patches/975-mtkhnat91-integrated-ppe-6.12.113.patch" \
+			|| die "could not apply the reviewed integrated-PPE 999-eth-91 compatibility edit"
+		log "preserved original 999-eth-91 patch; omitted only HNAT-only stale unwind hunk"
+	else
+		die "expected vendor 999-eth-91 patch not found or unrecognized"
+	fi
+	# Keep the RM502Q +8h SMS timestamp workaround as a narrow source patch to
+	# the pinned QModem feed; do not replace the whole upstream sms_forwarder.
+	local sms_source="$SOURCE_DIR/feeds/qmodem/application/sms_forwarder_next/files/sms_forwarder_next"
+	[ -f "$sms_source" ] || die "missing sms_forwarder_next source: $sms_source"
+	if grep -Fq 'const SMS_TZ_FIX = 28800;' "$sms_source" && \
+	   grep -Fq 'let ts = int(timestamp) - SMS_TZ_FIX;' "$sms_source"; then
+		log "QModem SMS UTC+8 timestamp fix already applied"
+	else
+		patch -d "$SOURCE_DIR" -p1 --forward --silent < "$ROOT_DIR/patches/969-qmodem-sms-timestamp-utc8.patch" \
+			|| die "could not apply the reviewed QModem SMS timestamp patch"
+		log "applied RM502Q SMS timestamp correction to the pinned QModem source"
+	fi
+
 	# 970 is a kernel patch: it only has to be dropped into the mediatek
 	# kernel patch directory, the kernel build applies it with -p1.
 	dir="$SOURCE_DIR/target/linux/mediatek/patches-6.12"
@@ -260,6 +355,15 @@ apply_patches() {
 	stage_file_safely "$ROOT_DIR/patches/970-pwm-fan-boot-duty.patch" \
 		"$dir/970-pwm-fan-boot-duty.patch"
 	log "staged target/linux/mediatek/patches-6.12/970-pwm-fan-boot-duty.patch"
+	# The vendor debugfs patch creates MIB readers for all three GMAC IDs,
+	# although H5000M enables only GMAC0/1. Keep these post-vendor patches in
+	# the target kernel patch queue; they guard sparse MACs and remove proc/
+	# debugfs callbacks before Ethernet MMIO/devm teardown.
+	for p in 999-eth-94-mtk_eth-debugfs-mib-safe.patch \
+		  999-eth-95-mtk_eth-debugfs-lifecycle.patch; do
+		stage_file_safely "$ROOT_DIR/patches/$p" "$dir/$p"
+		log "staged target/linux/mediatek/patches-6.12/$p"
+	done
 	# Keep IPv6 explicit in the kernel fragment for the integrated PPE
 	# IPv6 flow-offload path.
 	local kernel_config="$SOURCE_DIR/target/linux/mediatek/filogic/config-6.12"
@@ -280,6 +384,12 @@ apply_patches() {
 	stage_tree_safely "$ROOT_DIR/package/h5000m-fancontrol" \
 		"$SOURCE_DIR/package/h5000m-fancontrol"
 	log "staged H5000M fan-control package"
+	stage_tree_safely "$ROOT_DIR/package/h5000m-modem-support" \
+		"$SOURCE_DIR/package/h5000m-modem-support"
+	log "staged H5000M RM502Q / standalone ModemWebUI support package"
+	stage_tree_safely "$ROOT_DIR/package/h5000m-network-guard" \
+		"$SOURCE_DIR/package/h5000m-network-guard"
+	log "staged H5000M IPv6 route/fast-fail guard package"
 
 	# The chasey-dev 25.12 base does not ship package/kernel/mt76, while the
 	# H5000M device profile still declares the upstream MT7992 stack. Stage the
@@ -287,6 +397,7 @@ apply_patches() {
 	# MT7992 firmware are actually selected and installed in the image.
 	[ -f "$ROOT_DIR/vendor/mt76/Makefile" ] || die "missing vendored mt76 package"
 	[ -f "$ROOT_DIR/vendor/mt76/patches/110-mtk-wed-v3.1-compat.patch" ] || die "missing MTK WED 3.1 compatibility patch"
+	[ -f "$ROOT_DIR/vendor/mt76/patches/0118-wifi-mt76-mt7996-fix-wed-rro-ba-delete-event-layout.patch" ] || die "missing targeted MT7996 WED-RRO event-layout fix"
 	stage_tree_safely "$ROOT_DIR/vendor/mt76" "$SOURCE_DIR/package/kernel/mt76"
 	[ -f "$SOURCE_DIR/package/kernel/mt76/Makefile" ] || die "could not stage vendored mt76 package"
 	log "staged vendored official mt76 package (MT7992 Wi-Fi)"
@@ -451,13 +562,24 @@ collect() {
 	# integrated mtk_eth_soc/mtk_ppe; USB/QMI is intentionally not counted as
 	# proven PPE hardware offload here.
 	for pkg in kmod-nf-conntrack kmod-nf-nat kmod-nf-flow kmod-nft-offload \
-		   kmod-nft-fullcone kmod-tcp-bbr kmod-usb3 kmod-qmi_wwan_q kmod-mt7996e; do
+		   kmod-nft-fullcone kmod-tcp-bbr kmod-usb3 kmod-qmi_wwan_q kmod-mt7996e \
+		   h5000m-fancontrol h5000m-modem-support h5000m-network-guard \
+		   smartdns luci-app-smartdns luci-app-openclash luci-app-qmodem-next \
+		   sms-forwarder-next; do
 		grep -q "^${pkg} - " "$manifest" || die "required acceleration/data-path package absent from image manifest: $pkg"
 	done
 	if grep -q '^kmod-mediatek_hnat - ' "$manifest" || \
 	   grep -q '^hnat-detect - ' "$manifest"; then
 		die "independent mtkhnat packages unexpectedly entered the integrated-PPE image"
 	fi
+	if grep -q '^sendat - ' "$manifest"; then
+		die "vendor sendat package conflicts with the H5000M AT isolation wrapper"
+	fi
+	local qmi_kernel_src
+	qmi_kernel_src="$(find "$SOURCE_DIR/build_dir" -type f -path '*/drivers/net/usb/qmi_wwan.c' -print -quit)"
+	[ -n "$qmi_kernel_src" ] || die "missing prepared kernel qmi_wwan.c for final source audit"
+	grep -Fq 'QMI_MATCH_FF_FF_FF(0x2c7c, 0x030b)' "$qmi_kernel_src" \
+		|| die "kernel 6.12.113 qmi_wwan source lacks its upstream EG120K USB ID"
 	cp -f "$manifest" "$ARTIFACTS_DIR/openwrt-image.manifest"
 	[ -f "$tgt/profiles.json" ] && cp -f "$tgt/profiles.json" "$ARTIFACTS_DIR/" || true
 
@@ -469,10 +591,14 @@ collect() {
 		echo "source_commit=$(git -C "$SOURCE_DIR" rev-parse HEAD)"
 		echo "device=hiveton_h5000m"
 		echo "target=mediatek/filogic"
-		echo "kernel=$(sed -n 's/^LINUX_VERSION-6\.12 = //p' "$SOURCE_DIR/target/linux/generic/kernel-6.12")"
+		echo "kernel=6.12$(sed -n 's/^LINUX_VERSION-6\.12 = //p' "$SOURCE_DIR/target/linux/generic/kernel-6.12")"
 		echo "wifi_stack=official mt76 (kmod-mt7996e + kmod-mt7992-23-firmware)"
-		echo "fan_patches=970+971+972+973 applied; integrated PPE/nft-offload; upstream thermal trips retained"
+		echo "kernel_updates=Linux 6.12.113 stable (kernel.org SHA256 pinned); duplicate QMI/NAPI backports preserved out of queue"
+		echo "board_patches=968+969+970+971+972+973+974+975 applied; ethernet_debugfs_patches=94+95; integrated PPE/nft-offload; upstream thermal trips retained"
 		echo "acceleration=integrated mtk_eth_soc/mtk_ppe + nft-offload; USB-QMI PPE offload unclaimed; IPv6; BBR; MT76/WED3.1"
+		echo "modem_support=QModem Next + standalone WebUI/AT role mapping/QSCAN/QMI recovery; WeCom adapter installed"
+		echo "ipv6_guard=LAN-route repair + China-prefix fast-fail; DNS targets and OpenClash user config are not embedded"
+		echo "private_config=user-supplied; no subscription, webhook key, password, or proxy secret embedded"
 		echo "--- feeds ---"
 		grep '^src-git' "$SOURCE_DIR/feeds.conf.default"
 		echo "--- openclash ---"
@@ -521,6 +647,7 @@ main() {
 		exit 0
 	fi
 
+	command -v bc >/dev/null 2>&1 || die "host dependency 'bc' is required for kernel 6.12 preparation; install bc before a full build"
 	run_build
 	collect
 	log "done"
