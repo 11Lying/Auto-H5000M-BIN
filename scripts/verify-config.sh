@@ -592,9 +592,9 @@ if git -C "$SRC" diff --quiet -- target/linux/generic/config-6.12; then
   # generic kernel config must remain untouched; the expected IPv6 fragment is
   # the only local kernel-config change.
   added="$(git -C "$SRC" diff -- target/linux/mediatek/filogic/config-6.12 | grep '^+' | grep -v '^+++' || true)"
-  unexpected="$(printf '%s\n' "$added" | grep -vE '^\+# H5000M: ' | grep -vE '^\+CONFIG_IPV6=y$' | grep -vE '^\+$' || true)"
+  unexpected="$(printf '%s\n' "$added" | grep -vE '^\+# H5000M: ' | grep -vE '^\+CONFIG_(IPV6|MEDIATEK_NETSYS_V3)=y$' | grep -vE '^\+$' || true)"
   if [ -z "$unexpected" ]; then
-    pass "CPUFreq/OPP upstream inputs unmodified; expected IPv6 fragment only"
+    pass "CPUFreq/OPP upstream inputs unchanged; only HNAT NETSYS-v3 and IPv6 fragments added"
   else
     fail "CPUFreq/OPP upstream inputs were modified (unexpected: $unexpected)"
   fi

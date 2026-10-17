@@ -390,7 +390,8 @@ p=Path(sys.argv[1])
 lines=p.read_text().splitlines()
 for sym in ('CONFIG_MEDIATEK_NETSYS_V3', 'CONFIG_IPV6'):
     lines=[line for line in lines if line != f'# {sym} is not set' and not line.startswith(sym+'=')]
-    lines.append(sym+'=y')
+lines.extend(['', '# H5000M: MT7987 HNAT v5 needs NETSYS v3; dual-stack flow offload needs IPv6',
+              'CONFIG_MEDIATEK_NETSYS_V3=y', 'CONFIG_IPV6=y'])
 p.write_text('\n'.join(lines)+'\n')
 PYCFG
 	log "enabled NETSYS v3 and IPv6 for MT7987 HNAT v5"
