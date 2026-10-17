@@ -127,6 +127,9 @@ read_temp() {  # echoes integer C or returns 1
 }
 
 read_wifi_temp() {  # echoes integer C (offset-adjusted) or returns 1
+	# Honor the explicit CPU-only setting before probing hwmon. Otherwise an
+	# mt76 temperature sensor would still override wifi_temp=0 below.
+	[ "$WIFITEMP" = "1" ] || return 1
 	# Prefer upstream mt76 hwmon temperature (millidegrees); legacy iwpriv is
 	# only a fallback for vendor images and is not required by this build.
 	for _h in /sys/class/hwmon/hwmon*; do
@@ -142,7 +145,6 @@ read_wifi_temp() {  # echoes integer C (offset-adjusted) or returns 1
 				;;
 		esac
 	done
-	[ "$WIFITEMP" = 1 ] || return 1
 	[ -x "$IWPRIV" ] || return 1
 	line=$("$IWPRIV" "$WIFIIFACE" stat 2>/dev/null | grep -i CurrentTemperature | head -1)
 	[ -n "$line" ] || return 1
